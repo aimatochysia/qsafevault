@@ -10,6 +10,10 @@ import '../config/sync_config.dart';
 import 'rendezvous_client.dart';
 import 'package:qsafevault/services/secure_storage.dart';
 import 'app_logger.dart';
+import 'tor_service.dart';
+import 'tor_sync_server.dart';
+import 'tor_sync_client.dart';
+import 'device_registry_client.dart';
 
 @immutable
 class PinSession {
@@ -29,8 +33,14 @@ class JoinOffer {
 }
 
 class SyncService {
+  final _cfg = SyncConfig.defaults();
+
   Map<String, dynamic> _buildRtcConfig() {
-    final cfg = SyncConfig.defaults();
+    final cfg = _cfg;
+    if (cfg.transport == 'tor') {
+      _logSync('Transport=tor: WebRTC config requested but disabled');
+      return const <String, dynamic>{};
+    }
     final iceServers = <Map<String, dynamic>>[
       {
         'urls': [
@@ -64,6 +74,12 @@ class SyncService {
 
   final SecureStorage _secure = SecureStorage();
   final RendezvousClient _rv = RendezvousClient(config: SyncConfig.defaults());
+
+  final DeviceRegistryClient _dr = DeviceRegistryClient();
+  final TorService _tor = TorService();
+  TorSyncServer? _torServer;
+  int? _socksPort;
+  String? _onionHost;
 
   SimpleKeyPair? _deviceKeyPair;
   String? _devicePubKeyB64;
@@ -111,8 +127,82 @@ class SyncService {
     return _trustedPeers.toList();
   }
 
+
+  Future<({String onion, int socksPort})> startTorNode({
+    required SecretKey masterKey,
+    required Future<String> Function() getLocalVaultJson,
+    required Future<void> Function(String) applyMerged,
+    required String userId,
+    required String deviceId,
+    int? localPort,
+    int? ttlSec,
+  }) async {
+    await init();
+    if (_cfg.transport != 'tor') {
+      throw StateError('Transport is not tor; set QSV_TRANSPORT=tor');
+    }
+    final lp = localPort ?? _cfg.torLocalSyncPort;
+    final started = await _tor.start(localSyncPort: lp);
+    _onionHost = started.onion;
+    _socksPort = started.socksPort;
+
+    _torServer ??= TorSyncServer(
+      port: lp,
+      masterKey: masterKey,
+      crypto: CryptoService(),
+      getLocalVaultJson: getLocalVaultJson,
+      applyMerged: applyMerged,
+    );
+    await _torServer!.start();
+
+    await _dr.register(
+      userId: userId,
+      deviceId: deviceId,
+      onionHost: _onionHost!,
+      port: 5000,
+      ttlSec: ttlSec ?? 7 * 24 * 3600,
+    );
+
+    AppLogger.instance.write('[tor] node started onion=$_onionHost socks=$_socksPort localPort=$lp registered=$userId/$deviceId');
+    return (onion: _onionHost!, socksPort: _socksPort!);
+  }
+
+  Future<void> torSyncOnceWithPeer({
+    required SecretKey masterKey,
+    required String userId,
+    required String targetDeviceId,
+    required Future<String> Function() getLocalVaultJson,
+    required Future<void> Function(String) applyMerged,
+  }) async {
+    if (_cfg.transport != 'tor') {
+      throw StateError('Transport is not tor; set QSV_TRANSPORT=tor');
+    }
+    final socks = _socksPort ?? _cfg.torDefaultSocksPort;
+    final devices = await _dr.list(userId);
+    final peer = devices.firstWhere(
+      (d) => d.deviceId == targetDeviceId,
+      orElse: () => throw StateError('Peer device not found'),
+    );
+    final client = TorSocksClient(socksPort: socks);
+    final localJson = await getLocalVaultJson();
+    final payload = await CryptoService().encryptUtf8(masterKey, localJson);
+    final resp = await client.postSync(
+      onionHost: peer.onion,
+      port: peer.port,
+      payload: payload,
+    );
+    final mergedJson = await CryptoService().decryptUtf8(masterKey, Uint8List.fromList(resp));
+    await applyMerged(mergedJson);
+    AppLogger.instance.write('[tor] sync OK with ${peer.deviceId}@${peer.onion}:${peer.port} (bytes=${resp.length})');
+  }
+
+
   Future<Map<String, String>> createOffer() async {
     await init();
+    if (_cfg.transport == 'tor') {
+      _logSync('Transport=tor: WebRTC createOffer disabled');
+      throw StateError('WebRTC disabled (transport=tor). Use Tor methods.');
+    }
     await _ensurePcAndChannel(isOfferer: true);
 
     status = SyncStatus.signaling;
@@ -130,6 +220,10 @@ class SyncService {
   }
 
   Future<void> setRemoteAnswer(Map<String, String> answer) async {
+    if (_cfg.transport == 'tor') {
+      _logSync('Transport=tor: ignoring setRemoteAnswer');
+      return;
+    }
     if (_pc == null) throw StateError('PeerConnection not initialized');
     final desc = RTCSessionDescription(answer['sdp']!, answer['type']!);
     await _pc!.setRemoteDescription(desc);
@@ -137,6 +231,10 @@ class SyncService {
 
   Future<Map<String, String>> createAnswerForRemoteOffer(Map<String, String> remoteOffer) async {
     await init();
+    if (_cfg.transport == 'tor') {
+      _logSync('Transport=tor: WebRTC createAnswer disabled');
+      throw StateError('WebRTC disabled (transport=tor). Use Tor methods.');
+    }
     await _ensurePcAndChannel(isOfferer: false);
 
     status = SyncStatus.signaling;
@@ -156,8 +254,11 @@ class SyncService {
     return payload;
   }
 
-
   Future<void> sendHello() async {
+    if (_cfg.transport == 'tor') {
+      _logSync('Transport=tor: sendHello ignored (WebRTC-only)');
+      return;
+    }
     _ensureChannelOpen();
     final msg = {
       'type': 'hello',
@@ -210,8 +311,11 @@ class SyncService {
     _events = null;
   }
 
-
   Future<void> _ensurePcAndChannel({required bool isOfferer}) async {
+    if (_cfg.transport == 'tor') {
+      _logSync('Transport=tor: _ensurePcAndChannel skipped');
+      return;
+    }
     if (_pc != null) return;
     _pc = await createPeerConnection(_buildRtcConfig());
     _logSync('PeerConnection created (offerer=$isOfferer)');
@@ -338,7 +442,6 @@ class SyncService {
       throw StateError('Data channel is not open');
     }
   }
-
 
   Future<void> _loadOrCreateDeviceKeys() async {
     final existingPriv = await _secure.read(_kDevicePrivKey);
