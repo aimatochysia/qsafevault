@@ -14,6 +14,7 @@ import 'tor_service.dart';
 import 'tor_sync_server.dart';
 import 'tor_sync_client.dart';
 import 'device_registry_client.dart';
+import 'package:qsafevault/services/crypto_service.dart';
 
 @immutable
 class PinSession {
