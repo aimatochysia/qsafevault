@@ -41,18 +41,18 @@ License
 Components
 - App: Flutter UI and services (vault storage, crypto, sync).
 - Storage: AES‑256‑GCM encrypted vault; atomic writes; backups; optional wrapped key in secure storage.
-- Device identity: Ed25519 key pair generated per device; public key shared to build a trusted peers list.
-- Sync: WebRTC data channel with rendezvous signaling via short PIN. Offer/Answer are sealed using a key derived from the PIN (Argon2id + AES‑GCM) so the server never sees plaintext SDP.
+- Device identity: Ed25519 key pair generated per device (for local features).
+- Sync: Stateless, PIN + password‑protected encrypted relay over HTTPS. The app encrypts the payload end‑to‑end and sends it in short‑lived chunks via a serverless relay; the relay stores only opaque chunks with a 30–60s TTL and never sees plaintext.
 
 Data flow
 1) Unlock vault with password (Argon2id -> master key -> decrypt vault)
 2) Optionally store a wrapped fast‑unlock key in platform secure storage
-3) Sync:
-   - Host creates a session (PIN) and publishes a sealed offer
-   - Join resolves PIN, fetches offer, and publishes sealed answer
-   - Devices authenticate peers by Ed25519 public keys
-   - Manifest exchange decides whether to send or request vault
-   - Vault JSON sent over encrypted data channel
+3) Sync (relay):
+   - Sender chooses a 6‑digit PIN and a transfer password
+   - App derives a transfer key deterministically from PIN + password and encrypts the vault
+   - Encrypted bytes are chunked and POSTed to /api/send with { pin, passwordHash, chunkIndex, totalChunks, data }
+   - Receiver polls GET /api/receive?pin=...&passwordHash=...; chunks are dequeued and assembled
+   - Receiver decrypts with the same transfer key and applies the vault
 
 ---
 
@@ -118,65 +118,59 @@ CI/CD
 
 Runtime configuration is via --dart-define.
 
-- QSV_SYNC_BASEURL: Base URL for the rendezvous (PIN) server
-  - Example: --dart-define=QSV_SYNC_BASEURL=https://qsafevault-server.vercel.app
+- QSV_SYNC_BASEURL: Base URL for the relay server
+  - Example: --dart-define=QSV_SYNC_BASEURL=https://your-relay.vercel.app
   - For local development: --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
 
 Notes
-- All HTTP/HTTPS calls are logged at debug level (sanitized: PIN masked, ciphertext redacted).
-- Default timeouts: httpTimeout=8s, pollInterval≈800ms, pollMaxWait=180s.
+- All HTTP/HTTPS calls are short‑lived; the relay retains chunks for 30–60s only.
+- Poll settings: httpTimeout≈8s, pollInterval≈800ms, pollMaxWait≈180s.
 
 ---
 
-## Device synchronization (PIN pairing)
+## Device synchronization (PIN relay)
 
 Prerequisites
-- Both devices open the Sync dialog
-- Exchange and add each other’s Ed25519 public key to “Trusted peers” (one‑time)
+- Sender and Receiver agree on a 6‑digit PIN and a temporary transfer password (not stored).
+- Both devices open the Sync dialog (relay mode).
 
-Rendezvous server (required)
-- The app expects:
-  - POST /v1/sessions → { sessionId, pin, saltB64, ttlSec }
-  - GET /v1/sessions/resolve?pin=XXXXXX → { sessionId, saltB64, ttlSec }
-  - POST/GET /v1/sessions/{id}/offer → { envelope }
-  - POST/GET /v1/sessions/{id}/answer → { envelope }
-  - DELETE /v1/sessions/{id}
-- Offer/Answer envelopes are sealed; server stores no plaintext SDP or PIN.
-- See SERVER_API_SPEC.md for schema details and examples.
+Relay endpoints (stateless)
+- POST /api/send → { status }
+- GET  /api/receive?pin=...&passwordHash=... → { status, chunk? }
+  - status ∈ waiting | chunkAvailable | done | expired
+  - chunk: { chunkIndex, totalChunks, data } (opaque, encrypted; base64)
 
 How to sync
-- Host:
-  - Open Sync dialog → Start pairing → a PIN appears with TTL
-  - Wait; the app publishes a sealed offer automatically
-- Join:
-  - Enter the PIN → the app resolves, polls for offer, then publishes the sealed answer
-- Both:
-  - The data channel opens; devices authenticate public keys
-  - Manifest exchange decides direction; vault is sent automatically
+- Sender:
+  - Choose PIN + transfer password
+  - The app encrypts and uploads chunks to /api/send (TTL 30–60s)
+- Receiver:
+  - Enter the same PIN + transfer password
+  - The app polls /api/receive, assembles chunks, decrypts, and applies the vault
 
-Troubleshooting
-- PIN not found or expired
-  - Generate a new PIN (host) and re‑enter (join)
-- “Answer not received before timeout”
-  - Ensure the join device posted the answer within TTL
-- Flaky pairing
-  - Prefer Tor-based P2P sync to avoid NAT/firewall issues
-- Untrusted peer
-  - Add the displayed public key to your trusted list and retry
+Security
+- End‑to‑end encryption with AES‑GCM using a key derived (Argon2id) from PIN + transfer password (deterministic salt).
+- Relay stores only opaque chunk strings and deletes them immediately after delivery or TTL expiry.
+
+---
+
+## Troubleshooting
+
+- waiting status persists
+  - Sender not yet uploading or PIN/password mismatch.
+- expired
+  - 60s TTL elapsed before transfer finished. Restart with a new PIN/password.
+- Decryption failure
+  - PIN or transfer password mismatch; retry.
+- Very large vault stalls
+  - Keep both apps foreground; avoid device sleep during transfer.
 
 ---
 
 ## Logging and diagnostics
-
-- Sync HTTP logs: prefix [rv] (RendezvousClient)
-  - Requests and responses are printed with masked PIN and redacted ciphertext
-  - Polling logs include start/timeout markers
-- App events (SyncService):
-  - LocalDescriptionReadyEvent, PeerAuthenticatedEvent, HandshakeCompleteEvent
-  - ManifestReceivedEvent, VaultRequestedEvent, VaultReceivedEvent
-
-Windows console
-- The Windows runner opens a console when run under a debugger; logs are printed there.
+- Sync relay HTTP logs use prefix [relay]
+- Events: DataSentEvent / DataReceivedEvent counts, HandshakeCompleteEvent (receive finished)
+- No chunks retained after delivery or TTL; replay not possible.
 
 ---
 

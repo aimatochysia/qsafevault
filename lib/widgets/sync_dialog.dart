@@ -1,332 +1,368 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui' show FontFeature;
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '/services/sync_service.dart';
-import '/services/rendezvous_client.dart' show RendezvousHttpException;
 
-enum SyncRole { host, join }
+enum RelayRole { sender, receiver }
 
 class SyncDialog extends StatefulWidget {
   final Function(String vaultJson) onReceiveData;
   final String currentVaultJson;
-  final SyncRole? initialRole;
+  final RelayRole? initialRole;
   const SyncDialog({
     Key? key,
     required this.onReceiveData,
     required this.currentVaultJson,
     this.initialRole,
   }) : super(key: key);
+
   @override
   State<SyncDialog> createState() => _SyncDialogState();
 }
 
 class _SyncDialogState extends State<SyncDialog> {
+  String _passwordHash(String pwd) {
+    return base64Url.encode(utf8.encode(pwd));
+  }
+
+  Future<void> _waitForAck(String pin, String pwd) async {
+    final hash = _passwordHash(pwd);
+    final url = Uri.parse('/api/relay');
+    int tries = 0;
+    while (mounted && tries < 60) {
+      await Future.delayed(const Duration(seconds: 1));
+      try {
+        final resp = await http.post(url,
+          body: jsonEncode({'action': 'ack-status', 'pin': pin, 'passwordHash': hash}),
+          headers: {'Content-Type': 'application/json'});
+        if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) return;
+      } catch (_) {}
+      tries++;
+      if (!mounted) return;
+      setState(() { _status = 'Waiting for other device to finish…'; });
+    }
+    setState(() { _error = 'Timeout waiting for other device.'; });
+  }
+
+  Future<void> _sendAck(String pin, String pwd) async {
+    final hash = _passwordHash(pwd);
+    final url = Uri.parse('/api/relay');
+    try {
+      await http.post(url, body: jsonEncode({'action': 'ack', 'pin': pin, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'});
+    } catch (_) {}
+  }
   final SyncService _sync = SyncService();
 
+  RelayRole _role = RelayRole.sender;
   String _status = 'Idle';
   String? _error;
-  String _devicePub = '';
-  List<String> _trusted = [];
 
-  String? _pinDisplay;
-  String? _pinSessionId;
-  String? _pinSaltB64;
-  int _pinTtlSec = 0;
-  Timer? _ttlTimer;
-  int _ttlLeft = 0;
+  final _pinCtl = TextEditingController();
+  final _pwdCtl = TextEditingController();
 
-  SyncRole _role = SyncRole.host;
+  bool _busy = false;
+  int _sent = 0;
+  int _received = 0;
 
-  final TextEditingController _pinCtl = TextEditingController();
-  bool _joining = false;
+  StreamSubscription<SyncEvent>? _sub;
+
+  bool _senderSessionStarted = false;
+  String? _generatedPin;
 
   @override
   void initState() {
     super.initState();
-    _role = widget.initialRole ?? _role;
+    _role = widget.initialRole ?? RelayRole.sender;
     _init();
-  }
-
-  @override
-  void dispose() {
-    _sync.stop();
-    _ttlTimer?.cancel();
-    _pinCtl.dispose();
-    super.dispose();
   }
 
   Future<void> _init() async {
     await _sync.init();
-    final pub = await _sync.getDevicePublicKeyBase64();
-    final peers = await _sync.getTrustedPeers();
-    setState(() {
-      _devicePub = pub;
-      _trusted = peers;
+    _sub = _sync.events?.listen((e) {
+      if (!mounted) return;
+      if (e is DataSentEvent) {
+        setState(() => _sent++);
+      } else if (e is DataReceivedEvent) {
+        setState(() => _received++);
+      } else if (e is HandshakeCompleteEvent) {
+      } else if (e is ErrorEvent) {
+        setState(() {
+          _error = e.message;
+          _status = 'Error';
+          _busy = false;
+        });
+      }
     });
-    _sync.events?.listen(_onEvent);
   }
 
-  void _onEvent(SyncEvent e) async {
-    if (!mounted) return;
-    if (e is HandshakeCompleteEvent) {
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _sync.stop();
+    _pinCtl.dispose();
+    _pwdCtl.dispose();
+    super.dispose();
+  }
+
+  String _genPin() {
+    final n = Random.secure().nextInt(1000000);
+    return n.toString().padLeft(6, '0');
+  }
+
+  Future<void> _startSend() async {
+    final pwd = _pwdCtl.text.trim();
+    if (pwd.length < 6) {
+      setState(() => _error = 'Transfer password too short');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Encrypting & uploading…';
+      _error = null;
+      _sent = 0;
+      _senderSessionStarted = false;
+      _generatedPin = null;
+    });
+    try {
+      final genPin = _genPin();
+      final session = await _sync.createRelaySession(password: pwd, pinOverride: genPin);
+      _pinCtl.text = session.pin;
       setState(() {
-        _status = 'Secure Connection Established';
-        _joining = false;
+        _generatedPin = session.pin;
+        _senderSessionStarted = true;
       });
-      await _sync.sendManifest(widget.currentVaultJson);
-    } else if (e is UntrustedPeerEvent) {
+      await _sync.sendVaultRelay(
+        session: session,
+        transferPassword: pwd,
+        getVaultJson: () async => widget.currentVaultJson,
+      );
+      if (!mounted) return;
       setState(() {
-        _status = 'Untrusted peer. Add their code to trusted peers.';
-        _error = 'Untrusted peer public key: ${e.pubKeyB64}';
-        _joining = false;
+        _status = 'Upload complete. Waiting for other device to finish…';
+        _busy = true;
       });
-    } else if (e is PeerAuthenticatedEvent) {
+      await _waitForAck(session.pin, pwd);
+      if (!mounted) return;
       setState(() {
-        _status = 'Peer authenticated. Connecting…';
+        _role = RelayRole.receiver;
+        _busy = false;
         _error = null;
       });
-    } else if (e is ManifestReceivedEvent) {
-      final localManifest = SyncManifest.fromVaultJson(widget.currentVaultJson);
-      final peerNewer = e.manifest.timestampMs > localManifest.timestampMs ||
-          e.manifest.hashBase64 != localManifest.hashBase64;
-      if (peerNewer) {
-        await _sync.requestVault();
-        setState(() => _status = 'Requested vault from peer…');
-      } else {
-        await _sync.sendVaultData(widget.currentVaultJson);
-        setState(() => _status = 'Sent local vault to peer.');
-      }
-    } else if (e is VaultRequestedEvent) {
-      await _sync.sendVaultData(widget.currentVaultJson);
-      setState(() => _status = 'Peer requested vault. Sent.');
-    } else if (e is VaultReceivedEvent) {
-      widget.onReceiveData(e.json);
+      await _startReceive(auto: true, pin: session.pin, pwd: pwd);
+    } catch (e) {
       if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vault synced successfully!')),
-      );
-    } else if (e is ErrorEvent) {
       setState(() {
-        _error = e.message;
+        _error = '$e';
         _status = 'Error';
-        _joining = false;
       });
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _startPinPairing() async {
+  Future<void> _startReceive({bool auto = false, String? pin, String? pwd}) async {
+    final usePin = pin ?? _pinCtl.text.trim();
+    final usePwd = pwd ?? _pwdCtl.text.trim();
+    if (!_validInputs(usePin, usePwd)) return;
     setState(() {
-      _status = 'Starting PIN session…';
+      _busy = true;
+      _status = 'Waiting for chunks…';
       _error = null;
-      _pinDisplay = null;
-      _pinSessionId = null;
-      _pinSaltB64 = null;
-      _pinTtlSec = 0;
-      _ttlLeft = 0;
+      _received = 0;
     });
     try {
-      final sess = await _sync.createPinPairingSession();
-      setState(() {
-        _pinDisplay = sess.pin;
-        _pinSessionId = sess.sessionId;
-        _pinSaltB64 = sess.saltB64;
-        _pinTtlSec = sess.ttlSec;
-        _ttlLeft = sess.ttlSec;
-      });
-      _ttlTimer?.cancel();
-      _ttlTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted) return;
+      final session = await _sync.createRelaySession(password: usePwd, pinOverride: usePin);
+      final decrypted = await _sync.receiveVaultRelay(
+        session: session,
+        transferPassword: usePwd,
+      );
+      if (!mounted) return;
+      if (decrypted == null) {
         setState(() {
-          _ttlLeft = (_ttlLeft - 1).clamp(0, 1 << 30);
-          if (_ttlLeft == 0) {
-            _status = 'PIN expired. Tap Restart to generate a new PIN.';
-            _ttlTimer?.cancel();
-          }
+          _status = 'Expired or incomplete.';
+          _busy = false;
         });
-      });
-
-      final offer = await _sync.createOffer();
-      await _sync.hostPublishOffer(
-        sessionId: _pinSessionId!,
-        pin: _pinDisplay!,
-        saltB64: _pinSaltB64!,
-        offer: offer,
-      );
-      setState(() => _status = 'Waiting for the other device…');
-
-      await _sync.hostWaitForAnswer(
-        sessionId: _pinSessionId!,
-        pin: _pinDisplay!,
-        saltB64: _pinSaltB64!,
-        maxWait: Duration(seconds: _pinTtlSec > 0 ? _pinTtlSec : 180),
-      );
-    } on RendezvousHttpException catch (e) {
+        return;
+      }
       setState(() {
-        if (e.statusCode == 410) {
-          _error = 'PIN expired. Restart pairing.';
-        } else if (e.statusCode == 404) {
-          _error = 'Session not found. Restart pairing.';
-        } else {
-          _error = e.message ?? e.toString();
-        }
-        _status = 'Error';
+        _status = 'Finalizing…';
+        _busy = true;
       });
+      await _sendAck(session.pin, usePwd);
+      if (!mounted) return;
+      widget.onReceiveData(decrypted);
+      if (auto) {
+        setState(() {
+          _role = RelayRole.sender;
+          _busy = false;
+          _error = null;
+          _senderSessionStarted = false;
+        });
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted) return;
+        _startSend();
+      } else {
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vault synced (relay).')),
+        );
+      }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = '$e';
         _status = 'Error';
       });
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _joinViaPin(String pin) async {
-    if (pin.isEmpty) return;
-    if (_joining) return;
-    setState(() {
-      _joining = true;
-      _status = 'Resolving PIN…';
-      _error = null;
-    });
-    try {
-      final jo = await _sync.joinFetchOfferByPin(pin);
-      setState(() {
-        _status = 'Connecting… (offer received)';
-        _pinSaltB64 = jo.saltB64;
-        _pinSessionId = jo.sessionId;
-      });
-      final answer = await _sync.createAnswerForRemoteOffer(jo.offer);
-      await _sync.joinPublishAnswer(
-        sessionId: jo.sessionId,
-        pin: pin,
-        saltB64: jo.saltB64,
-        answer: answer,
-      );
-      setState(() => _status = 'Waiting for connection…');
-    } on RendezvousHttpException catch (e) {
-      setState(() {
-        if (e.statusCode == 404) {
-          _error = 'PIN not found. Make sure the host shared the current PIN.';
-        } else if (e.statusCode == 410) {
-          _error = 'PIN expired. Ask the host to restart pairing.';
-        } else {
-          _error = e.message ?? e.toString();
-        }
-        _status = 'Error';
-        _joining = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = '$e';
-        _status = 'Error';
-        _joining = false;
-      });
+  bool _validInputs(String pin, String pwd) {
+    if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
+      setState(() => _error = 'PIN must be 6 digits');
+      return false;
     }
+    if (pwd.length < 6) {
+      setState(() => _error = 'Transfer password too short');
+      return false;
+    }
+    return true;
   }
 
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final dialogW = size.width * 0.85;
-    final dialogH = min(size.height * 0.8, 520.0);
+    final dialogH = min(size.height * 0.8, 440.0);
 
     return AlertDialog(
       content: SizedBox(
         width: dialogW,
         height: dialogH,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('Device Sync (PIN)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text('Status: $_status', style: const TextStyle(fontSize: 14)),
-            if (_error != null) ...[
-              const SizedBox(height: 6),
-              Text('Error: $_error', style: const TextStyle(color: Colors.red)),
-            ],
-            const SizedBox(height: 8),
-
-            ToggleButtons(
-              isSelected: [_role == SyncRole.host, _role == SyncRole.join],
-              onPressed: (i) => setState(() => _role = i == 0 ? SyncRole.host : SyncRole.join),
-              children: const [
-                Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Host')),
-                Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Join')),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            Expanded(
-              child: SingleChildScrollView(
-                child: _role == SyncRole.host ? _buildHost() : _buildJoin(),
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: dialogH),
+            child: IntrinsicHeight(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Device Sync (Relay)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('Status: $_status', style: const TextStyle(fontSize: 13)),
+                  if (_error != null) ...[
+                    const SizedBox(height: 4),
+                    Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 8),
+                  ToggleButtons(
+                    isSelected: [_role == RelayRole.sender, _role == RelayRole.receiver],
+                    onPressed: _busy ? null : (i) => setState(() => _role = i == 0 ? RelayRole.sender : RelayRole.receiver),
+                    children: const [
+                      Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Send')),
+                      Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Receive')),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _inputs(),
+                  const Spacer(),
+                  if (_role == RelayRole.sender)
+                    Text('Sent chunks: $_sent', style: const TextStyle(fontSize: 12))
+                  else
+                    Text('Received chunks: $_received', style: const TextStyle(fontSize: 12)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                          child: const Text('Close'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _busy
+                              ? null
+                              : () {
+                                  if (_role == RelayRole.sender) {
+                                    _startSend();
+                                  } else {
+                                    _startReceive();
+                                  }
+                                },
+                          child: Text(_busy
+                              ? (_role == RelayRole.sender ? 'Sending…' : 'Receiving…')
+                              : (_role == RelayRole.sender ? 'Send' : 'Receive')),
+                        ),
+                      ),
+                    ],
+                  )
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            const Text('Verify: Confirm last 4 chars of device ID match on both devices.', style: TextStyle(fontSize: 12)),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () {
-                _sync.stop();
-                Navigator.of(context).pop();
-              },
-              child: const Text('Close'),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildHost() {
+  Widget _inputs() {
+    final isSender = _role == RelayRole.sender;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ElevatedButton.icon(
-          onPressed: _startPinPairing,
-          icon: const Icon(Icons.lock),
-          label: const Text('Start pairing'),
-        ),
-        if (_pinDisplay != null) ...[
-          const SizedBox(height: 8),
-          Center(child: Text('PIN: $_pinDisplay', style: const TextStyle(fontSize: 28, fontFeatures: [FontFeature.tabularFigures()]))),
-          const SizedBox(height: 4),
-          Text('Expires in: ${_ttlLeft}s', textAlign: TextAlign.center),
-          const SizedBox(height: 8),
-          if (_ttlLeft == 0)
-            OutlinedButton.icon(
-              onPressed: _startPinPairing,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Restart pairing'),
+        if (isSender)
+          ...[
+            if (_senderSessionStarted && _generatedPin != null)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'PIN: $_generatedPin',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 2),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Share this PIN with the receiver.',
+                    style: TextStyle(fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+          ]
+        else
+          TextField(
+            controller: _pinCtl,
+            enabled: !_busy,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            decoration: const InputDecoration(
+              labelText: '6‑digit PIN',
+              counterText: '',
+              border: OutlineInputBorder(),
             ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildJoin() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text('Enter the PIN shown on the other device:'),
-        const SizedBox(height: 6),
+          ),
         TextField(
-          controller: _pinCtl,
-          keyboardType: TextInputType.number,
-          textInputAction: TextInputAction.done,
-          maxLength: 8,
+          controller: _pwdCtl,
+          enabled: !_busy && !(isSender && _senderSessionStarted),
+          obscureText: true,
           decoration: const InputDecoration(
-            labelText: 'PIN (6–8 digits)',
+            labelText: 'Transfer password',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (v) => _joinViaPin(v.trim()),
-          enabled: !_joining,
         ),
         const SizedBox(height: 8),
-        ElevatedButton(
-          onPressed: _joining ? null : () => _joinViaPin(_pinCtl.text.trim()),
-          child: Text(_joining ? 'Joining…' : 'Join'),
+        const Text(
+          'Both devices must enter the SAME PIN + password within ~60s. '
+          'Data is end‑to‑end encrypted; relay never sees plaintext.',
+          style: TextStyle(fontSize: 11),
         ),
       ],
     );
