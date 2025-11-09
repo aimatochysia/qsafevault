@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import '../services/app_logger.dart';
 class HomePage extends StatefulWidget {
   final StorageService storage;
@@ -34,6 +35,7 @@ class _HomePageState extends State<HomePage> {
   String _searchQuery = "";
   bool _saving = false;
   String? _logDir;
+  final Random _rand = Random.secure();
   @override
   void initState() {
     super.initState();
@@ -207,6 +209,95 @@ class _HomePageState extends State<HomePage> {
     );
   }
   
+  String _randomPassword(int length) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%^&*()-_=+[]{};:,.<>?';
+    return List.generate(length, (_) => chars[_rand.nextInt(chars.length)]).join();
+  }
+
+  String _randomUsername() {
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
+    const alnum = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final len = 6 + _rand.nextInt(7);
+    final first = letters[_rand.nextInt(letters.length)];
+    final rest = List.generate(len - 1, (_) => alnum[_rand.nextInt(alnum.length)]).join();
+    return first + rest;
+  }
+
+  String _randomDomain() {
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
+    const tlds = ['com', 'net', 'org', 'io', 'app', 'dev', 'site', 'tech', 'cloud'];
+    final sldLen = 5 + _rand.nextInt(7);
+    final sld = List.generate(sldLen, (_) => letters[_rand.nextInt(letters.length)]).join();
+    final tld = tlds[_rand.nextInt(tlds.length)];
+    return '$sld.$tld';
+  }
+
+  Future<void> _generateHundredEntries() async {
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final List<Map<String, String>> data = [];
+      for (var i = 0; i < 100; i++) {
+        final domain = _randomDomain();
+        final username = _randomUsername();
+        final email = '$username@$domain';
+        data.add({
+          'id': 'gen_${now}_$i',
+          'site': domain,
+          'username': username,
+          'email': email,
+          'password': _randomPassword(16),
+        });
+      }
+
+      final generated = PasswordEntry.listFromJson(jsonEncode(data));
+      setState(() {
+        final merged = <String, PasswordEntry>{};
+        for (final e in _entries) {
+          merged[e.id] = e;
+        }
+        for (final e in generated) {
+          merged[e.id] = e;
+        }
+        _entries = merged.values.toList();
+      });
+      await _saveToDisk();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Generated 100 entries')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Generation error: $e')),
+      );
+    }
+  }
+
+  void _confirmDeleteAllEntries() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete ALL entries'),
+        content: const Text('This will remove all entries from the vault (not saved until you tap Save). Are you sure?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              setState(() => _entries.clear());
+              Navigator.of(context).pop();
+              _remindSave();
+            },
+            child: const Text('Delete all'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openSyncDialog() async {
     showDialog(
       context: context,
@@ -351,6 +442,16 @@ class _HomePageState extends State<HomePage> {
             tooltip: 'Select log folder',
             icon: const Icon(Icons.folder),
             onPressed: _chooseLogFolder,
+          ),
+          IconButton(
+            tooltip: 'Generate 100 demo entries',
+            icon: const Icon(Icons.bolt),
+            onPressed: _generateHundredEntries,
+          ),
+          IconButton(
+            tooltip: 'Delete ALL entries',
+            icon: const Icon(Icons.delete_forever),
+            onPressed: _confirmDeleteAllEntries,
           ),
           IconButton(onPressed: _addEntry, icon: const Icon(Icons.add)),
           IconButton(
