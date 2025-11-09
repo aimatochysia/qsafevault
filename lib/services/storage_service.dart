@@ -26,20 +26,27 @@ class StorageService {
   final SecureStorage _osSecure = SecureStorage();
 
   void _log(String msg) {
+    print('[StorageService] $msg');
   }
 
   Future<String> pickDirectoryWithFallback() async {
+    _log('Attempting to pick directory');
     try {
       final selected = await FilePicker.platform.getDirectoryPath();
+      _log('User selected directory: $selected');
       if (selected != null && selected.isNotEmpty) return selected;
-    } catch (_) {}
+    } catch (e) {
+      _log('Directory picker error: $e');
+    }
     final appDoc = await getApplicationDocumentsDirectory();
     final dir = Directory('${appDoc.path}/PasswordManager');
     if (!await dir.exists()) await dir.create(recursive: true);
+    _log('Fallback directory: ${dir.path}');
     return dir.path;
   }
 
   Future<String?> pickVaultFileForOpen() async {
+    _log('Attempting to pick vault file');
     try {
       final res = await FilePicker.platform.pickFiles(
         dialogTitle: 'Open Vault - select .vault file',
@@ -48,13 +55,23 @@ class StorageService {
         allowMultiple: false,
       );
       final path = res?.files.single.path;
+      _log('User selected file: $path');
       if (path == null) return null;
       if (!path.toLowerCase().endsWith('.vault')) {
+        _log('Rejected file (not .vault): $path');
         throw Exception('Please select a .vault file.');
       }
-      if (!await File(path).exists()) throw Exception('File not found.');
-      return path;
+      if (!await File(path).exists()) {
+        _log('File not found: $path');
+        throw Exception('File not found.');
+      }
+      final appDoc = await getApplicationDocumentsDirectory();
+      final safePath = '${appDoc.path}/${path.split(Platform.pathSeparator).last}';
+      await File(path).copy(safePath);
+      _log('Vault file copied to: $safePath');
+      return safePath;
     } catch (e) {
+      _log('Error picking vault file: $e');
       rethrow;
     }
   }

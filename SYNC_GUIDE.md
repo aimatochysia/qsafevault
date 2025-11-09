@@ -15,103 +15,59 @@ What this covers
 
 ## Quick Start
 
-Host (Device A)
-1) Open Sync dialog → Select “Host” → Start pairing.
-2) A 6–8 digit PIN appears with a short TTL; share the PIN verbally.
-3) Wait. The app publishes a sealed offer and waits for the answer.
+Sender (Device A)
+1) Open Sync dialog → Select “Relay (PIN)” → Enter a 6‑digit PIN and a temporary transfer password → Start.
+2) The app encrypts the vault with a key derived from PIN+password and uploads short‑lived chunks to /api/send.
+3) Keep the screen open until the receiver finishes.
 
-Join (Device B)
-1) Open Sync dialog → Select “Join” → Enter the PIN → Join.
-2) The app resolves the PIN and polls for the host’s offer.
-3) It creates an answer and publishes it back.
-4) After the channel opens, peers authenticate and sync proceeds.
+Receiver (Device B)
+1) Open Sync dialog → Select “Relay (PIN)” → Enter the same PIN and transfer password → Join.
+2) The app polls /api/receive and assembles chunks.
+3) After assembly, it decrypts and applies the vault.
 
 Identity verification
-- After the channel opens, confirm the last 4 chars of device IDs match on both devices.
-- If warned “Untrusted peer”, add the displayed public key to your trusted list and retry.
+- Transfer password is ephemeral and never sent to the relay; only passwordHash namespaces the session.
+- Device public keys are not required for the relay flow.
 
 ## What to expect in logs (debug)
-- Joiner:
-  - [rv] GET /v1/sessions/resolve → 200 once
-  - [rv] pollOffer start … → repeated GET /offer 404 offer_not_set, then 200
-  - [rv] POST /v1/sessions/{id}/answer → 200
-- Host:
-  - [rv] POST /v1/sessions → 200
-  - [rv] POST /v1/sessions/{id}/offer → 200
-  - [rv] pollAnswer start … → GET /answer 200 shortly after join’s POST
-- App events:
-  - PeerAuthenticatedEvent → HandshakeCompleteEvent → Manifest/Vault exchange
+- Sender:
+  - [relay] POST /api/send → 200 { status: "waiting" } repeated per chunk
+- Receiver:
+  - [relay] GET /api/receive?pin=****** → 200 { status: "chunkAvailable", chunk: { ... } } until done
+  - { status: "done" } after last chunk, or { status: "expired" } if TTL elapsed
 
-Note: Logs mask PIN and redact ciphertext. That’s expected.
+Note: Relay never logs or stores plaintext; chunks are opaque and TTL‑bound.
 
 ## Troubleshooting
 
 Common errors and fixes
-- 404 pin_not_found
-  - The PIN is wrong or the session was already resolved and deleted. Generate a new PIN on host and re-enter.
-- 410 session_expired / PIN expired
-  - TTL elapsed. Restart pairing and use the new PIN.
-- 404 offer_not_set (Joiner while polling /offer)
-  - Normal until host has published the offer. The app will keep polling; just wait.
-- “Answer not received before timeout” (Host)
-  - Joiner didn’t post answer in time. Ensure the join device is online and within TTL; retry with a new PIN if needed.
-- Untrusted peer
-  - Add the displayed public key to your trusted list, then retry pairing.
-- Flaky pairing or no channel open
-  - Prefer Tor-based P2P sync to avoid NAT/firewall issues.
-
-## Mobile platforms (Android/iOS) notes
-
-Permissions
-- Android: INTERNET and ACCESS_NETWORK_STATE in android/app/src/main/AndroidManifest.xml.
-  - These are install-time; Android won’t prompt at runtime.
-- iOS: Add NSLocalNetworkUsageDescription in ios/Runner/Info.plist to avoid local network privacy blocks when peers are on the same LAN.
-
-Diagnostics
-- On Windows builds, sync logs are also written to qsafevault-sync.log next to the executable (fallback to %TEMP%).
-- Logs include ICE candidate types (host/srflx/relay) and connection state transitions.
+- waiting (Receiver)
+  - Sender has not uploaded chunks yet; verify PIN/password match; wait or retry.
+- expired
+  - TTL (30–60s) elapsed. Restart with a new PIN/password.
+- done
+  - All chunks delivered; if decryption fails, verify the password and PIN, then retry.
+- Slow/partial transfers
+  - Keep both apps in foreground. Chunks are deleted after delivery; receiver must assemble within TTL.
 
 ## Security & Privacy
 
-- No plaintext SDP or PIN ever stored on the rendezvous server; Offer/Answer are sealed with a PIN‑derived key (Argon2id + AES‑GCM).
-- WebRTC data channel is protected by DTLS; vault remains AES‑256‑GCM encrypted at rest.
-- Only share public keys; never share private keys.
-- Use a new PIN per pairing; sessions are single‑use and time‑limited.
+- End‑to‑end encryption: Vault is encrypted with AES‑GCM using a key derived (Argon2id) from PIN + transfer password with deterministic salt; relay cannot read payloads.
+- Stateless relay: Chunks are stored in memory only with a TTL (30–60s) and deleted upon delivery.
+- No persistent storage, databases, or logs on the relay.
 
 ## Server expectations (summary)
 
 Endpoints
-- POST /v1/sessions → { sessionId, pin, saltB64, ttlSec }
-- GET /v1/sessions/resolve?pin=XXXXXX → { sessionId, saltB64, ttlSec }
-- POST/GET /v1/sessions/{id}/offer → { envelope }
-- POST/GET /v1/sessions/{id}/answer → { envelope }
-- DELETE /v1/sessions/{id}
+- POST /api/send → { status }
+- GET  /api/receive?pin=XXXXXX&passwordHash=... → { status, chunk? }
+  - status ∈ waiting | chunkAvailable | done | expired
+  - chunk: { chunkIndex, totalChunks, data }
 
 Behavior
-- Keep PIN→session mapping valid after resolve; do not delete on first resolve.
-- Return 404 for unset offer/answer, 410 for expired sessions, 429 for rate limits.
-- Store only sealed envelopes (no plaintext SDP/PIN), enforce TTL and rate limits.
+- Keep chunks in memory only with TTL 30–60s; delete on delivery.
+- Cleanup expired sessions/chunks on every invocation.
+- No plaintext inspection or modification of payloads.
 
 Notes
 - The README has a high‑level overview; this guide focuses on practical usage and troubleshooting for PIN pairing.
-
-## Tor-based P2P sync (recommended)
-
-How it works
-- Each device launches Tor in the background and exposes a local SOCKS5 proxy (127.0.0.1:<socksPort>).
-- The app starts a local sync server bound to 127.0.0.1:<localSyncPort>.
-- Tor creates a hidden service mapping <onionHost>:5000 to 127.0.0.1:<localSyncPort>.
-- The app registers userId/deviceId → <onionHost>:5000 on the existing Vercel + Redis backend.
-- Other devices for the same user fetch the device list, pick a target, and connect over Tor
-  (SOCKS5 CONNECT 127.0.0.1:<socksPort> → http://<onionHost>:5000/sync), exchanging only encrypted payloads.
-
-Security
-- No password DB leaves devices unencrypted.
-- Payloads are end-to-end encrypted (Argon2id-derived key + AES-GCM/ChaCha20-Poly1305).
-- The backend stores only userId/deviceId → onion endpoint metadata.
-
-Operator notes
-- No STUN/TURN needed; Tor traverses NATs/firewalls automatically.
-- Backend endpoints:
-  - POST /v1/devices { userId, deviceId, onion, port, ttlSec }
-  - GET  /v1/devices/{userId} → { devices: [{ deviceId, onion, port }] }
