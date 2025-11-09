@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '/services/sync_service.dart';
+import '/config/sync_config.dart';
 
 enum RelayRole { sender, receiver }
 
@@ -29,7 +30,9 @@ class _SyncDialogState extends State<SyncDialog> {
 
   Future<void> _waitForAck(String pin, String pwd) async {
     final hash = _passwordHash(pwd);
-    final url = Uri.parse('/api/relay');
+    final cfg = SyncConfig.defaults();
+    final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
+    final url = Uri.parse('$baseUrl/api/relay');
     int tries = 0;
     while (mounted && tries < 60) {
       await Future.delayed(const Duration(seconds: 1));
@@ -48,7 +51,9 @@ class _SyncDialogState extends State<SyncDialog> {
 
   Future<void> _sendAck(String pin, String pwd) async {
     final hash = _passwordHash(pwd);
-    final url = Uri.parse('/api/relay');
+    final cfg = SyncConfig.defaults();
+    final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
+    final url = Uri.parse('$baseUrl/api/relay');
     try {
       await http.post(url, body: jsonEncode({'action': 'ack', 'pin': pin, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'});
     } catch (_) {}
