@@ -39,7 +39,7 @@ class _SyncDialogState extends State<SyncDialog> {
       try {
         final resp = await http.post(url,
           body: jsonEncode({'action': 'ack-status', 'pin': pin, 'passwordHash': hash}),
-          headers: {'Content-Type': 'application/json'});
+          headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
         if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) return;
       } catch (_) {}
       tries++;
@@ -55,7 +55,7 @@ class _SyncDialogState extends State<SyncDialog> {
     final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final url = Uri.parse('$baseUrl/api/relay');
     try {
-      await http.post(url, body: jsonEncode({'action': 'ack', 'pin': pin, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'});
+      await http.post(url, body: jsonEncode({'action': 'ack', 'pin': pin, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
     } catch (_) {}
   }
   final SyncService _sync = SyncService();
