@@ -286,7 +286,8 @@ class _SyncDialogState extends State<SyncDialog> {
           _error = null;
           _senderSessionStarted = false;
         });
-        await Future.delayed(const Duration(milliseconds: 300));
+        // Wait longer to ensure server has processed completion and cleared chunks
+        await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
         await _startSendWithPin(usePin, usePwd);
       }
