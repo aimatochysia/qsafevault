@@ -94,6 +94,8 @@ class RelayClient {
     required int totalChunks,
     required Uint8List chunkData,
   }) async {
+    // Server lifecycle note: Chunks sent via 'send' action are stored with 60s TTL.
+    // After all chunks delivered, session moves to 'completed' state but ack key persists.
     final uri = _u('/api/relay');
     final body = jsonEncode({
       'action': 'send',
@@ -121,6 +123,9 @@ class RelayClient {
     required String pin,
     required String passwordHash,
   }) async {
+    // Server lifecycle note: 'receive' action polls for chunks with 60s TTL.
+    // Status can be: 'waiting', 'chunkAvailable', 'done' (all delivered), or 'expired'.
+    // After all chunks delivered, subsequent polls return 'done' and session is marked completed.
     final uri = _u('/api/relay');
     final body = jsonEncode({
       'action': 'receive',

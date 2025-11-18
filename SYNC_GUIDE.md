@@ -44,7 +44,7 @@ Common errors and fixes
 - waiting (Receiver)
   - Sender has not uploaded chunks yet; verify PIN/password match; wait or retry.
 - expired
-  - TTL (30–60s) elapsed. Restart with a new PIN/password.
+  - TTL (60s) elapsed. Restart with a new PIN/password.
 - done
   - All chunks delivered; if decryption fails, verify the password and PIN, then retry.
 - Slow/partial transfers
@@ -53,7 +53,8 @@ Common errors and fixes
 ## Security & Privacy
 
 - End‑to‑end encryption: Vault is encrypted with AES‑GCM using a key derived (Argon2id) from PIN + transfer password with deterministic salt; relay cannot read payloads.
-- Stateless relay: Chunks are stored in memory only with a TTL (30–60s) and deleted upon delivery.
+- Stateless relay: Chunks are stored in memory only with a TTL (60s) and deleted upon delivery.
+- Acknowledgment key: After receiving all chunks, the receiver sends an acknowledgment. The ack key persists separately for 60s even after the session is marked completed, ensuring reliable bidirectional sync.
 - No persistent storage, databases, or logs on the relay.
 
 ## Server expectations (summary)
@@ -63,9 +64,12 @@ Endpoints
 - GET  /api/receive?pin=XXXXXX&passwordHash=... → { status, chunk? }
   - status ∈ waiting | chunkAvailable | done | expired
   - chunk: { chunkIndex, totalChunks, data }
+- POST /api/ack → marks transfer as acknowledged by receiver
+- POST /api/ack-status → { acknowledged: boolean }
 
 Behavior
-- Keep chunks in memory only with TTL 30–60s; delete on delivery.
+- Keep chunks in memory only with TTL 60s; delete on delivery.
+- Session lifecycle: After all chunks delivered, session transitions to 'completed' state. Acknowledgment key persists for an additional 60s to support bidirectional sync.
 - Cleanup expired sessions/chunks on every invocation.
 - No plaintext inspection or modification of payloads.
 

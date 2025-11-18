@@ -59,6 +59,8 @@ class SyncService {
   }) async {
     await init();
     status = SyncStatus.signaling;
+    // Server lifecycle: Session persists with 60s TTL; after completion,
+    // session moves to 'completed' state but ack key remains valid until TTL expires.
     final key = await _relay.deriveTransferKey(pin: session.pin, password: transferPassword);
     final vaultJson = await getVaultJson();
     final envelopeBytes = await _relay.encryptPayload(key, vaultJson);
@@ -84,6 +86,9 @@ class SyncService {
   }) async {
     await init();
     status = SyncStatus.signaling;
+    // Server lifecycle: Sessions have 60s TTL. When all chunks are delivered,
+    // status changes to 'done'. The acknowledgment key persists separately,
+    // allowing receivers to send ack even after session is marked completed.
     final deadline = DateTime.now().add(maxWait ?? _cfg.pollMaxWait);
     final buffers = <int, Uint8List>{};
     int? total;

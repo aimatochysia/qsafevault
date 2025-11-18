@@ -34,17 +34,42 @@ class _SyncDialogState extends State<SyncDialog> {
     final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final url = Uri.parse('$baseUrl/api/relay');
     int tries = 0;
+    // Updated to handle new server semantics: separate ack key with 60s TTL,
+    // session can be in 'completed' state while ack key persists.
     while (mounted && tries < 60) {
       await Future.delayed(const Duration(seconds: 1));
       try {
         final resp = await http.post(url,
           body: jsonEncode({'action': 'ack-status', 'pin': pin, 'passwordHash': hash}),
           headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
-        if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) return;
+        if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) {
+          if (!mounted) return;
+          setState(() { _status = 'Acknowledged – waiting for return transfer…'; });
+          return;
+        }
       } catch (_) {}
+      
+      // Fallback: after several tries, poll receive to check if session is 'done'
+      // If at least one chunk was sent and receive returns 'done', consider it acknowledged
+      if (tries > 10) {
+        try {
+          final receiveResp = await http.post(url,
+            body: jsonEncode({'action': 'receive', 'pin': pin, 'passwordHash': hash}),
+            headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
+          if (receiveResp.statusCode == 200) {
+            final body = jsonDecode(receiveResp.body);
+            if (body['status'] == 'done') {
+              if (!mounted) return;
+              setState(() { _status = 'Transfer complete – waiting for return transfer…'; });
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+      
       tries++;
       if (!mounted) return;
-      setState(() { _status = 'Waiting for other device to finish…'; });
+      setState(() { _status = 'Waiting for other device to acknowledge…'; });
     }
     setState(() { _error = 'Timeout waiting for other device.'; });
   }
@@ -145,7 +170,7 @@ class _SyncDialogState extends State<SyncDialog> {
       );
       if (!mounted) return;
       setState(() {
-        _status = 'Upload complete. Waiting for other device to finish…';
+        _status = 'Upload complete. Waiting for other device to receive…';
         _busy = true;
       });
       await _waitForAck(session.pin, pwd);
@@ -156,6 +181,49 @@ class _SyncDialogState extends State<SyncDialog> {
         _error = null;
       });
       await _startReceive(auto: true, pin: session.pin, pwd: pwd);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _status = 'Error';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _startSendWithPin(String pin, String pwd) async {
+    if (pwd.length < 6) {
+      setState(() => _error = 'Transfer password too short');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Sending back…';
+      _error = null;
+      _sent = 0;
+    });
+    try {
+      final session = await _sync.createRelaySession(password: pwd, pinOverride: pin);
+      await _sync.sendVaultRelay(
+        session: session,
+        transferPassword: pwd,
+        getVaultJson: () async => widget.currentVaultJson,
+      );
+      if (!mounted) return;
+      setState(() {
+        _status = 'Return transfer complete. Waiting for acknowledgment…';
+        _busy = true;
+      });
+      await _waitForAck(session.pin, pwd);
+      if (!mounted) return;
+      // Done with bidirectional sync, close dialog
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -199,6 +267,16 @@ class _SyncDialogState extends State<SyncDialog> {
       if (!mounted) return;
       widget.onReceiveData(decrypted);
       if (auto) {
+        // This device is the original sender who sent first and is now receiving back
+        // Just close after receiving, the sync is complete
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
+        );
+      } else {
+        // This device is the original receiver, now send back to complete bidirectional sync
         setState(() {
           _role = RelayRole.sender;
           _busy = false;
@@ -207,14 +285,7 @@ class _SyncDialogState extends State<SyncDialog> {
         });
         await Future.delayed(const Duration(milliseconds: 300));
         if (!mounted) return;
-        _startSend();
-      } else {
-        await Future.delayed(const Duration(milliseconds: 300));
-        if (!mounted) return;
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Vault synced (relay).')),
-        );
+        await _startSendWithPin(usePin, usePwd);
       }
     } catch (e) {
       if (!mounted) return;
