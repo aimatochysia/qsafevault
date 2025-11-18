@@ -142,6 +142,7 @@ class _SyncDialogState extends State<SyncDialog> {
   }
 
   Future<void> _startSend() async {
+    if (_busy) return; // Prevent duplicate execution
     final pwd = _pwdCtl.text.trim();
     if (pwd.length < 6) {
       setState(() => _error = 'Transfer password too short');
@@ -193,6 +194,7 @@ class _SyncDialogState extends State<SyncDialog> {
   }
 
   Future<void> _startSendWithPin(String pin, String pwd) async {
+    if (_busy) return; // Prevent duplicate execution
     if (pwd.length < 6) {
       setState(() => _error = 'Transfer password too short');
       return;
@@ -236,6 +238,7 @@ class _SyncDialogState extends State<SyncDialog> {
   }
 
   Future<void> _startReceive({bool auto = false, String? pin, String? pwd}) async {
+    if (_busy) return; // Prevent duplicate execution
     final usePin = pin ?? _pinCtl.text.trim();
     final usePwd = pwd ?? _pwdCtl.text.trim();
     if (!_validInputs(usePin, usePwd)) return;
