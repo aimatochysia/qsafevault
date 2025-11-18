@@ -167,6 +167,49 @@ class _SyncDialogState extends State<SyncDialog> {
     }
   }
 
+  Future<void> _startSendWithPin(String pin, String pwd) async {
+    if (pwd.length < 6) {
+      setState(() => _error = 'Transfer password too short');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Sending back…';
+      _error = null;
+      _sent = 0;
+    });
+    try {
+      final session = await _sync.createRelaySession(password: pwd, pinOverride: pin);
+      await _sync.sendVaultRelay(
+        session: session,
+        transferPassword: pwd,
+        getVaultJson: () async => widget.currentVaultJson,
+      );
+      if (!mounted) return;
+      setState(() {
+        _status = 'Upload complete. Waiting for acknowledgment…';
+        _busy = true;
+      });
+      await _waitForAck(session.pin, pwd);
+      if (!mounted) return;
+      // Done with bidirectional sync, close dialog
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _status = 'Error';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _startReceive({bool auto = false, String? pin, String? pwd}) async {
     final usePin = pin ?? _pinCtl.text.trim();
     final usePwd = pwd ?? _pwdCtl.text.trim();
@@ -199,6 +242,16 @@ class _SyncDialogState extends State<SyncDialog> {
       if (!mounted) return;
       widget.onReceiveData(decrypted);
       if (auto) {
+        // This device is the original sender who sent first and is now receiving back
+        // Just close after receiving, the sync is complete
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
+        );
+      } else {
+        // This device is the original receiver, now send back to complete bidirectional sync
         setState(() {
           _role = RelayRole.sender;
           _busy = false;
@@ -207,14 +260,7 @@ class _SyncDialogState extends State<SyncDialog> {
         });
         await Future.delayed(const Duration(milliseconds: 300));
         if (!mounted) return;
-        _startSend();
-      } else {
-        await Future.delayed(const Duration(milliseconds: 300));
-        if (!mounted) return;
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Vault synced (relay).')),
-        );
+        await _startSendWithPin(usePin, usePwd);
       }
     } catch (e) {
       if (!mounted) return;
