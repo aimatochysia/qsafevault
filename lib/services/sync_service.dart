@@ -11,6 +11,21 @@ import 'crypto_service.dart';
 import 'relay_client.dart';
 import 'app_logger.dart';
 
+// TODO: Integration test for relay sync with new server semantics
+// Test approach:
+// 1. Mock RelayClient to simulate server responses with new lifecycle:
+//    - Session persists for 60s TTL
+//    - Session transitions to 'completed' state after all chunks delivered
+//    - Ack key persists separately for 60s even after completion
+//    - ack-status returns 'acknowledged' true after receiver sends ack
+// 2. Test scenarios:
+//    a) Normal bidirectional sync flow (send -> ack -> receive return transfer)
+//    b) Fallback: ack-status fails but receive returns 'done' (should succeed)
+//    c) Timeout: neither ack-status nor receive returns success within 60s
+//    d) Multiple chunks sent and received correctly
+// 3. Verify status messages are clear and user-facing
+// 4. Ensure no regression in existing send/receive logic
+
 @immutable
 class RelaySession {
   final String pin;
@@ -59,6 +74,8 @@ class SyncService {
   }) async {
     await init();
     status = SyncStatus.signaling;
+    // Server lifecycle: Session persists with 60s TTL; after completion,
+    // session moves to 'completed' state but ack key remains valid until TTL expires.
     final key = await _relay.deriveTransferKey(pin: session.pin, password: transferPassword);
     final vaultJson = await getVaultJson();
     final envelopeBytes = await _relay.encryptPayload(key, vaultJson);
@@ -84,6 +101,9 @@ class SyncService {
   }) async {
     await init();
     status = SyncStatus.signaling;
+    // Server lifecycle: Sessions have 60s TTL. When all chunks are delivered,
+    // status changes to 'done'. The acknowledgment key persists separately,
+    // allowing receivers to send ack even after session is marked completed.
     final deadline = DateTime.now().add(maxWait ?? _cfg.pollMaxWait);
     final buffers = <int, Uint8List>{};
     int? total;

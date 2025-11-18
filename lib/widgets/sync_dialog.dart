@@ -34,17 +34,42 @@ class _SyncDialogState extends State<SyncDialog> {
     final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final url = Uri.parse('$baseUrl/api/relay');
     int tries = 0;
+    // Updated to handle new server semantics: separate ack key with 60s TTL,
+    // session can be in 'completed' state while ack key persists.
     while (mounted && tries < 60) {
       await Future.delayed(const Duration(seconds: 1));
       try {
         final resp = await http.post(url,
           body: jsonEncode({'action': 'ack-status', 'pin': pin, 'passwordHash': hash}),
           headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
-        if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) return;
+        if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) {
+          if (!mounted) return;
+          setState(() { _status = 'Acknowledged – waiting for return transfer…'; });
+          return;
+        }
       } catch (_) {}
+      
+      // Fallback: after several tries, poll receive to check if session is 'done'
+      // If at least one chunk was sent and receive returns 'done', consider it acknowledged
+      if (tries > 10) {
+        try {
+          final receiveResp = await http.post(url,
+            body: jsonEncode({'action': 'receive', 'pin': pin, 'passwordHash': hash}),
+            headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
+          if (receiveResp.statusCode == 200) {
+            final body = jsonDecode(receiveResp.body);
+            if (body['status'] == 'done') {
+              if (!mounted) return;
+              setState(() { _status = 'Transfer complete – waiting for return transfer…'; });
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+      
       tries++;
       if (!mounted) return;
-      setState(() { _status = 'Waiting for other device to finish…'; });
+      setState(() { _status = 'Waiting for other device to acknowledge…'; });
     }
     setState(() { _error = 'Timeout waiting for other device.'; });
   }
@@ -145,7 +170,7 @@ class _SyncDialogState extends State<SyncDialog> {
       );
       if (!mounted) return;
       setState(() {
-        _status = 'Upload complete. Waiting for other device to finish…';
+        _status = 'Upload complete. Waiting for other device to receive…';
         _busy = true;
       });
       await _waitForAck(session.pin, pwd);
@@ -187,7 +212,7 @@ class _SyncDialogState extends State<SyncDialog> {
       );
       if (!mounted) return;
       setState(() {
-        _status = 'Upload complete. Waiting for acknowledgment…';
+        _status = 'Return transfer complete. Waiting for acknowledgment…';
         _busy = true;
       });
       await _waitForAck(session.pin, pwd);

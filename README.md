@@ -123,7 +123,7 @@ Runtime configuration is via --dart-define.
   - For local development: --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
 
 Notes
-- All HTTP/HTTPS calls are short‑lived; the relay retains chunks for 30–60s only.
+- All HTTP/HTTPS calls are short‑lived; the relay retains chunks for 60s only.
 - Poll settings: httpTimeout≈8s, pollInterval≈800ms, pollMaxWait≈180s.
 
 ---
@@ -143,14 +143,23 @@ Relay endpoints (stateless)
 How to sync
 - Sender:
   - Choose PIN + transfer password
-  - The app encrypts and uploads chunks to /api/send (TTL 30–60s)
+  - The app encrypts and uploads chunks to /api/send (TTL 60s)
 - Receiver:
   - Enter the same PIN + transfer password
   - The app polls /api/receive, assembles chunks, decrypts, and applies the vault
+  - Sends acknowledgment to notify sender the transfer is complete
+
+Bidirectional sync
+- After the initial transfer, roles reverse automatically
+- The original receiver becomes the sender for the return transfer
+- Uses the same PIN and password for seamless bidirectional sync
+- Acknowledgment keys persist for 60s to ensure reliable completion
 
 Security
-- End‑to‑end encryption with AES‑GCM using a key derived (Argon2id) from PIN + transfer password (deterministic salt).
-- Relay stores only opaque chunk strings and deletes them immediately after delivery or TTL expiry.
+- End‑to‑end encryption: Vault is encrypted with AES‑GCM using a key derived (Argon2id) from PIN + transfer password with deterministic salt; relay cannot read payloads.
+- Stateless relay: Chunks are stored in memory only with a TTL (60s) and deleted upon delivery.
+- Acknowledgment key: The receiver sends an acknowledgment after receiving all chunks. This ack key persists for 60s to support reliable bidirectional sync, even after the session is marked completed.
+- No persistent storage, databases, or logs on the relay.
 
 ---
 
