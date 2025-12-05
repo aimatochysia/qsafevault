@@ -8,27 +8,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import '../config/sync_config.dart';
 import 'app_logger.dart';
-
-/// Invite code generator for peer discovery.
-/// Generates 8-character case-sensitive alphanumeric codes.
-class InviteCodeGenerator {
-  static const String _chars = 
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  static const int _length = 8;
-  
-  static String generate() {
-    final random = Random.secure();
-    return List.generate(
-      _length, 
-      (_) => _chars[random.nextInt(_chars.length)]
-    ).join();
-  }
-  
-  static bool isValid(String code) {
-    if (code.length != _length) return false;
-    return RegExp(r'^[A-Za-z0-9]{8}$').hasMatch(code);
-  }
-}
+import 'invite_code_utils.dart';
 
 /// WebRTC Peer Connection Manager for P2P sync.
 /// Uses STUN servers only for NAT traversal (no TURN).
@@ -87,7 +67,7 @@ class P2pPeerService {
   Future<String> initAsInitiator({required String transferPassword}) async {
     _isInitiator = true;
     _localPeerId = _generatePeerId();
-    _inviteCode = InviteCodeGenerator.generate();
+    _inviteCode = InviteCodeUtils.generate();
     
     // Derive encryption key from invite code + password
     _encryptionKey = await _deriveKey(_inviteCode!, transferPassword);
@@ -116,7 +96,7 @@ class P2pPeerService {
     required String inviteCode,
     required String transferPassword,
   }) async {
-    if (!InviteCodeGenerator.isValid(inviteCode)) {
+    if (!InviteCodeUtils.isValid(inviteCode)) {
       throw ArgumentError('Invalid invite code format');
     }
     

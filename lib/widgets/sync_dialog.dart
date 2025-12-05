@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '/services/sync_service.dart';
+import '/services/invite_code_utils.dart';
 import '/config/sync_config.dart';
 
 enum RelayRole { sender, receiver }
@@ -132,13 +133,6 @@ class _SyncDialogState extends State<SyncDialog> {
     super.dispose();
   }
 
-  /// Generate 8-character alphanumeric invite code
-  String _genInviteCode() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    final random = Random.secure();
-    return List.generate(8, (_) => chars[random.nextInt(chars.length)]).join();
-  }
-
   Future<void> _startSend() async {
     if (_busy) return;
     final pwd = _pwdCtl.text.trim();
@@ -155,7 +149,7 @@ class _SyncDialogState extends State<SyncDialog> {
       _generatedInviteCode = null;
     });
     try {
-      final genInviteCode = _genInviteCode();
+      final genInviteCode = InviteCodeUtils.generate();
       final session = await _sync.createRelaySession(password: pwd, inviteCodeOverride: genInviteCode);
       _inviteCodeCtl.text = session.inviteCode;
       setState(() {
@@ -297,7 +291,7 @@ class _SyncDialogState extends State<SyncDialog> {
 
   bool _validInputs(String inviteCode, String pwd) {
     // Validate 8-character alphanumeric invite code
-    if (!RegExp(r'^[A-Za-z0-9]{8}$').hasMatch(inviteCode)) {
+    if (!InviteCodeUtils.isValid(inviteCode)) {
       setState(() => _error = 'Invite code must be 8 alphanumeric characters');
       return false;
     }

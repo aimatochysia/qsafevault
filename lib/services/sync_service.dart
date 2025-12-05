@@ -12,6 +12,7 @@ import 'relay_client.dart';
 import 'app_logger.dart';
 import 'crdt_service.dart';
 import 'p2p_peer_service.dart';
+import 'invite_code_utils.dart';
 
 /// Represents a relay session with invite code.
 /// Now uses 8-character alphanumeric codes instead of 6-digit PINs.
@@ -76,13 +77,6 @@ class SyncService {
     await _crdt!.init();
     _log('CRDT service initialized with device ID: ${_crdt!.deviceId}');
   }
-
-  /// Generate 8-character alphanumeric invite code
-  String _genInviteCode() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    final random = Random.secure();
-    return List.generate(8, (_) => chars[random.nextInt(chars.length)]).join();
-  }
   
   /// Create a relay session with invite code
   Future<RelaySession> createRelaySession({
@@ -90,7 +84,7 @@ class SyncService {
     String? inviteCodeOverride,
   }) async {
     await init();
-    final inviteCode = inviteCodeOverride ?? _genInviteCode();
+    final inviteCode = inviteCodeOverride ?? InviteCodeUtils.generate();
     final passwordHash = _relay.passwordHash(pin: inviteCode, password: password);
     _log('session created inviteCode=$inviteCode');
     return RelaySession(inviteCode: inviteCode, passwordHash: passwordHash);

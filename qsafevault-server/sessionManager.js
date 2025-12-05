@@ -46,8 +46,11 @@ function purgeExpired() {
   }
 }
 
+// Use a separator that cannot appear in base64-encoded passwordHash or alphanumeric invite codes
 function sessionKey(inviteCode, passwordHash) {
-  return `${inviteCode}:${passwordHash}`;
+  // Both inviteCode (alphanumeric) and passwordHash (base64) are URL-safe
+  // Using a null character as separator to avoid any possible collision
+  return `sess\x00${inviteCode}\x00${passwordHash}`;
 }
 
 // ==================== Chunk-based Relay (legacy compatibility) ====================
