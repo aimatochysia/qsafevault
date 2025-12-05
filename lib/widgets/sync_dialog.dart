@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '/services/sync_service.dart';
+import '/services/invite_code_utils.dart';
 import '/config/sync_config.dart';
 
 enum RelayRole { sender, receiver }
@@ -28,19 +29,17 @@ class _SyncDialogState extends State<SyncDialog> {
     return base64Url.encode(utf8.encode(pwd));
   }
 
-  Future<void> _waitForAck(String pin, String pwd) async {
+  Future<void> _waitForAck(String inviteCode, String pwd) async {
     final hash = _passwordHash(pwd);
     final cfg = SyncConfig.defaults();
     final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final url = Uri.parse('$baseUrl/api/relay');
     int tries = 0;
-    // Updated to handle new server semantics: separate ack key with 60s TTL,
-    // session can be in 'completed' state while ack key persists.
     while (mounted && tries < 60) {
       await Future.delayed(const Duration(seconds: 1));
       try {
         final resp = await http.post(url,
-          body: jsonEncode({'action': 'ack-status', 'pin': pin, 'passwordHash': hash}),
+          body: jsonEncode({'action': 'ack-status', 'pin': inviteCode, 'passwordHash': hash}),
           headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
         if (resp.statusCode == 200 && jsonDecode(resp.body)['acknowledged'] == true) {
           if (!mounted) return;
@@ -49,12 +48,10 @@ class _SyncDialogState extends State<SyncDialog> {
         }
       } catch (_) {}
       
-      // Fallback: after several tries, poll receive to check if session is 'done'
-      // If at least one chunk was sent and receive returns 'done', consider it acknowledged
       if (tries > 10) {
         try {
           final receiveResp = await http.post(url,
-            body: jsonEncode({'action': 'receive', 'pin': pin, 'passwordHash': hash}),
+            body: jsonEncode({'action': 'receive', 'pin': inviteCode, 'passwordHash': hash}),
             headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
           if (receiveResp.statusCode == 200) {
             final body = jsonDecode(receiveResp.body);
@@ -74,13 +71,13 @@ class _SyncDialogState extends State<SyncDialog> {
     setState(() { _error = 'Timeout waiting for other device.'; });
   }
 
-  Future<void> _sendAck(String pin, String pwd) async {
+  Future<void> _sendAck(String inviteCode, String pwd) async {
     final hash = _passwordHash(pwd);
     final cfg = SyncConfig.defaults();
     final baseUrl = cfg.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final url = Uri.parse('$baseUrl/api/relay');
     try {
-      await http.post(url, body: jsonEncode({'action': 'ack', 'pin': pin, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
+      await http.post(url, body: jsonEncode({'action': 'ack', 'pin': inviteCode, 'passwordHash': hash}), headers: {'Content-Type': 'application/json'}).timeout(cfg.httpTimeout);
     } catch (_) {}
   }
   final SyncService _sync = SyncService();
@@ -89,7 +86,7 @@ class _SyncDialogState extends State<SyncDialog> {
   String _status = 'Idle';
   String? _error;
 
-  final _pinCtl = TextEditingController();
+  final _inviteCodeCtl = TextEditingController();
   final _pwdCtl = TextEditingController();
 
   bool _busy = false;
@@ -99,7 +96,7 @@ class _SyncDialogState extends State<SyncDialog> {
   StreamSubscription<SyncEvent>? _sub;
 
   bool _senderSessionStarted = false;
-  String? _generatedPin;
+  String? _generatedInviteCode;
 
   @override
   void initState() {
@@ -131,17 +128,13 @@ class _SyncDialogState extends State<SyncDialog> {
   void dispose() {
     _sub?.cancel();
     _sync.stop();
-    _pinCtl.dispose();
+    _inviteCodeCtl.dispose();
     _pwdCtl.dispose();
     super.dispose();
   }
 
-  String _genPin() {
-    final n = Random.secure().nextInt(1000000);
-    return n.toString().padLeft(6, '0');
-  }
-
   Future<void> _startSend() async {
+    if (_busy) return;
     final pwd = _pwdCtl.text.trim();
     if (pwd.length < 6) {
       setState(() => _error = 'Transfer password too short');
@@ -153,14 +146,14 @@ class _SyncDialogState extends State<SyncDialog> {
       _error = null;
       _sent = 0;
       _senderSessionStarted = false;
-      _generatedPin = null;
+      _generatedInviteCode = null;
     });
     try {
-      final genPin = _genPin();
-      final session = await _sync.createRelaySession(password: pwd, pinOverride: genPin);
-      _pinCtl.text = session.pin;
+      final genInviteCode = InviteCodeUtils.generate();
+      final session = await _sync.createRelaySession(password: pwd, inviteCodeOverride: genInviteCode);
+      _inviteCodeCtl.text = session.inviteCode;
       setState(() {
-        _generatedPin = session.pin;
+        _generatedInviteCode = session.inviteCode;
         _senderSessionStarted = true;
       });
       await _sync.sendVaultRelay(
@@ -173,14 +166,14 @@ class _SyncDialogState extends State<SyncDialog> {
         _status = 'Upload complete. Waiting for other device to receive…';
         _busy = true;
       });
-      await _waitForAck(session.pin, pwd);
+      await _waitForAck(session.inviteCode, pwd);
       if (!mounted) return;
       setState(() {
         _role = RelayRole.receiver;
         _busy = false;
         _error = null;
       });
-      await _startReceive(auto: true, pin: session.pin, pwd: pwd);
+      await _startReceive(auto: true, inviteCode: session.inviteCode, pwd: pwd);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -192,7 +185,8 @@ class _SyncDialogState extends State<SyncDialog> {
     }
   }
 
-  Future<void> _startSendWithPin(String pin, String pwd) async {
+  Future<void> _startSendWithInviteCode(String inviteCode, String pwd) async {
+    if (_busy) return;
     if (pwd.length < 6) {
       setState(() => _error = 'Transfer password too short');
       return;
@@ -204,7 +198,7 @@ class _SyncDialogState extends State<SyncDialog> {
       _sent = 0;
     });
     try {
-      final session = await _sync.createRelaySession(password: pwd, pinOverride: pin);
+      final session = await _sync.createRelaySession(password: pwd, inviteCodeOverride: inviteCode);
       await _sync.sendVaultRelay(
         session: session,
         transferPassword: pwd,
@@ -215,9 +209,8 @@ class _SyncDialogState extends State<SyncDialog> {
         _status = 'Return transfer complete. Waiting for acknowledgment…';
         _busy = true;
       });
-      await _waitForAck(session.pin, pwd);
+      await _waitForAck(session.inviteCode, pwd);
       if (!mounted) return;
-      // Done with bidirectional sync, close dialog
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -235,10 +228,11 @@ class _SyncDialogState extends State<SyncDialog> {
     }
   }
 
-  Future<void> _startReceive({bool auto = false, String? pin, String? pwd}) async {
-    final usePin = pin ?? _pinCtl.text.trim();
+  Future<void> _startReceive({bool auto = false, String? inviteCode, String? pwd}) async {
+    if (_busy) return;
+    final useInviteCode = inviteCode ?? _inviteCodeCtl.text.trim();
     final usePwd = pwd ?? _pwdCtl.text.trim();
-    if (!_validInputs(usePin, usePwd)) return;
+    if (!_validInputs(useInviteCode, usePwd)) return;
     setState(() {
       _busy = true;
       _status = 'Waiting for chunks…';
@@ -246,7 +240,7 @@ class _SyncDialogState extends State<SyncDialog> {
       _received = 0;
     });
     try {
-      final session = await _sync.createRelaySession(password: usePwd, pinOverride: usePin);
+      final session = await _sync.createRelaySession(password: usePwd, inviteCodeOverride: useInviteCode);
       final decrypted = await _sync.receiveVaultRelay(
         session: session,
         transferPassword: usePwd,
@@ -263,12 +257,10 @@ class _SyncDialogState extends State<SyncDialog> {
         _status = 'Finalizing…';
         _busy = true;
       });
-      await _sendAck(session.pin, usePwd);
+      await _sendAck(session.inviteCode, usePwd);
       if (!mounted) return;
       widget.onReceiveData(decrypted);
       if (auto) {
-        // This device is the original sender who sent first and is now receiving back
-        // Just close after receiving, the sync is complete
         await Future.delayed(const Duration(milliseconds: 300));
         if (!mounted) return;
         Navigator.of(context).pop();
@@ -276,16 +268,15 @@ class _SyncDialogState extends State<SyncDialog> {
           const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
         );
       } else {
-        // This device is the original receiver, now send back to complete bidirectional sync
         setState(() {
           _role = RelayRole.sender;
           _busy = false;
           _error = null;
           _senderSessionStarted = false;
         });
-        await Future.delayed(const Duration(milliseconds: 300));
+        await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
-        await _startSendWithPin(usePin, usePwd);
+        await _startSendWithInviteCode(useInviteCode, usePwd);
       }
     } catch (e) {
       if (!mounted) return;
@@ -298,9 +289,10 @@ class _SyncDialogState extends State<SyncDialog> {
     }
   }
 
-  bool _validInputs(String pin, String pwd) {
-    if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
-      setState(() => _error = 'PIN must be 6 digits');
+  bool _validInputs(String inviteCode, String pwd) {
+    // Validate 8-character alphanumeric invite code
+    if (!InviteCodeUtils.isValid(inviteCode)) {
+      setState(() => _error = 'Invite code must be 8 alphanumeric characters');
       return false;
     }
     if (pwd.length < 6) {
@@ -394,18 +386,18 @@ class _SyncDialogState extends State<SyncDialog> {
       children: [
         if (isSender)
           ...[
-            if (_senderSessionStarted && _generatedPin != null)
+            if (_senderSessionStarted && _generatedInviteCode != null)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'PIN: $_generatedPin',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 2),
+                    'Code: $_generatedInviteCode',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 2, fontFamily: 'monospace'),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Share this PIN with the receiver.',
+                    'Share this 8-character code with the receiver.',
                     style: TextStyle(fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
@@ -415,14 +407,17 @@ class _SyncDialogState extends State<SyncDialog> {
           ]
         else
           TextField(
-            controller: _pinCtl,
+            controller: _inviteCodeCtl,
             enabled: !_busy,
-            keyboardType: TextInputType.number,
-            maxLength: 6,
+            keyboardType: TextInputType.text,
+            textCapitalization: TextCapitalization.none,
+            maxLength: 8,
+            style: const TextStyle(fontFamily: 'monospace', letterSpacing: 2),
             decoration: const InputDecoration(
-              labelText: '6‑digit PIN',
+              labelText: '8-character invite code',
               counterText: '',
               border: OutlineInputBorder(),
+              hintText: 'e.g., Ab3Xy9Zk',
             ),
           ),
         TextField(
@@ -436,7 +431,7 @@ class _SyncDialogState extends State<SyncDialog> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Both devices must enter the SAME PIN + password within ~60s. '
+          'Both devices must enter the SAME invite code + password within ~60s. '
           'Data is end‑to‑end encrypted; relay never sees plaintext.',
           style: TextStyle(fontSize: 11),
         ),

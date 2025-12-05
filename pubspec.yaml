@@ -23,6 +23,8 @@ dependencies:
   flutter_webrtc: ^1.2.0
   archive: ^3.4.10
   tor: ^0.0.9
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
 
 dev_dependencies:
   flutter_test:
