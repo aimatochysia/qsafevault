@@ -1,0 +1,21 @@
+{
+  "name": "qsafevault-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "vercel dev",
+    "serve": "node server.js",
+    "test": "node test/relay-test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "uuid": "^9.0.1",
+    "redis": "^4.6.13"
+  }
+}
