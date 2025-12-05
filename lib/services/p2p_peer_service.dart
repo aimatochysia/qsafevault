@@ -19,6 +19,7 @@ class P2pPeerService {
   
   RTCPeerConnection? _peerConnection;
   RTCDataChannel? _dataChannel;
+  RTCSessionDescription? _localOffer; // Store local offer for later use
   
   String? _localPeerId;
   String? _remotePeerId;
@@ -210,6 +211,7 @@ class P2pPeerService {
     // Create and send offer
     final offer = await _peerConnection!.createOffer();
     await _peerConnection!.setLocalDescription(offer);
+    _localOffer = offer; // Store for later use
     
     _log('Created offer, waiting for joiner...');
     
@@ -450,11 +452,11 @@ class P2pPeerService {
         
       case 'ready':
         // Joiner is ready, send offer
-        if (_isInitiator && _peerConnection?.localDescription != null) {
+        if (_isInitiator && _localOffer != null) {
           _remotePeerId = from;
           _sendSignal('offer', {
-            'type': _peerConnection!.localDescription!.type,
-            'sdp': _peerConnection!.localDescription!.sdp,
+            'type': _localOffer!.type,
+            'sdp': _localOffer!.sdp,
           });
         }
         break;
