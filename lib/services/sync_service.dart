@@ -10,47 +10,93 @@ import 'secure_storage.dart';
 import 'crypto_service.dart';
 import 'relay_client.dart';
 import 'app_logger.dart';
+import 'crdt_service.dart';
+import 'p2p_peer_service.dart';
 
+/// Represents a relay session with invite code.
+/// Now uses 8-character alphanumeric codes instead of 6-digit PINs.
 @immutable
 class RelaySession {
-  final String pin;
+  final String inviteCode; // 8-char alphanumeric (was 'pin')
   final String passwordHash;
-  const RelaySession({required this.pin, required this.passwordHash});
+  
+  const RelaySession({required this.inviteCode, required this.passwordHash});
+  
+  // Legacy alias for backward compatibility
+  String get pin => inviteCode;
 }
 
+/// Sync mode selection
+enum SyncMode {
+  /// HTTP relay-based sync (fallback, works through any NAT)
+  relay,
+  /// WebRTC peer-to-peer sync (preferred, direct connection)
+  p2p,
+}
+
+/// Unified Sync Service supporting both relay and P2P modes.
+/// 
+/// Features:
+/// - 8-character case-sensitive alphanumeric invite codes
+/// - CRDT-based conflict-free merging
+/// - WebRTC data channels for P2P communication
+/// - End-to-end encryption
+/// - Fallback to HTTP relay when P2P fails
 class SyncService {
   final _cfg = SyncConfig.defaults();
   final SecureStorage _secure = SecureStorage();
   final CryptoService _crypto = CryptoService();
   final RelayClient _relay = RelayClient(config: SyncConfig.defaults());
+  
+  CrdtService? _crdt;
+  P2pPeerService? _p2p;
 
   StreamController<SyncEvent>? _events;
   SyncStatus status = SyncStatus.idle;
+  SyncMode _currentMode = SyncMode.relay;
 
   void _log(String msg) {
-    try { AppLogger.instance.write('[relay] $msg'); } catch (_) {}
+    try { AppLogger.instance.write('[sync] $msg'); } catch (_) {}
   }
 
   Stream<SyncEvent>? get events => _events?.stream;
+  
+  /// Current sync mode
+  SyncMode get currentMode => _currentMode;
+  
+  /// CRDT service instance
+  CrdtService? get crdt => _crdt;
 
   Future<void> init() async {
     if (_events != null) return;
     _events = StreamController<SyncEvent>.broadcast();
+    
+    // Initialize CRDT service
+    _crdt = CrdtService(crypto: _crypto);
+    await _crdt!.init();
+    _log('CRDT service initialized with device ID: ${_crdt!.deviceId}');
   }
 
-  // Generate 6-digit PIN
-  String _genPin() {
-    final n = Random.secure().nextInt(1000000);
-    return n.toString().padLeft(6, '0');
+  /// Generate 8-character alphanumeric invite code
+  String _genInviteCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    final random = Random.secure();
+    return List.generate(8, (_) => chars[random.nextInt(chars.length)]).join();
   }
-
-  Future<RelaySession> createRelaySession({required String password, String? pinOverride}) async {
+  
+  /// Create a relay session with invite code
+  Future<RelaySession> createRelaySession({
+    required String password, 
+    String? inviteCodeOverride,
+  }) async {
     await init();
-    final pin = pinOverride ?? _genPin();
-    final passwordHash = _relay.passwordHash(pin: pin, password: password);
-    _log('session created pin=$pin');
-    return RelaySession(pin: pin, passwordHash: passwordHash);
+    final inviteCode = inviteCodeOverride ?? _genInviteCode();
+    final passwordHash = _relay.passwordHash(pin: inviteCode, password: password);
+    _log('session created inviteCode=$inviteCode');
+    return RelaySession(inviteCode: inviteCode, passwordHash: passwordHash);
   }
+
+  // ==================== Relay-based Sync (HTTP) ====================
 
   Future<void> sendVaultRelay({
     required RelaySession session,
@@ -58,17 +104,17 @@ class SyncService {
     required Future<String> Function() getVaultJson,
   }) async {
     await init();
+    _currentMode = SyncMode.relay;
     status = SyncStatus.signaling;
-    // Server lifecycle: Session persists with 60s TTL; after completion,
-    // session moves to 'completed' state but ack key remains valid until TTL expires.
-    final key = await _relay.deriveTransferKey(pin: session.pin, password: transferPassword);
+    
+    final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
     final vaultJson = await getVaultJson();
     final envelopeBytes = await _relay.encryptPayload(key, vaultJson);
     final chunks = _relay.chunk(envelopeBytes, size: 32 * 1024);
     _log('sending chunks=${chunks.length}');
     for (int i = 0; i < chunks.length; i++) {
       await _relay.sendChunk(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
         chunkIndex: i,
         totalChunks: chunks.length,
@@ -85,15 +131,14 @@ class SyncService {
     Duration? maxWait,
   }) async {
     await init();
+    _currentMode = SyncMode.relay;
     status = SyncStatus.signaling;
-    // Server lifecycle: Sessions have 60s TTL. When all chunks are delivered,
-    // status changes to 'done'. The acknowledgment key persists separately,
-    // allowing receivers to send ack even after session is marked completed.
+    
     final deadline = DateTime.now().add(maxWait ?? _cfg.pollMaxWait);
     final buffers = <int, Uint8List>{};
     int? total;
     while (DateTime.now().isBefore(deadline)) {
-      final r = await _relay.pollNext(pin: session.pin, passwordHash: session.passwordHash);
+      final r = await _relay.pollNext(pin: session.inviteCode, passwordHash: session.passwordHash);
       if (r.status == 'chunkAvailable' && r.index != null && r.data != null) {
         buffers[r.index!] = r.data!;
         total ??= r.total!;
@@ -101,7 +146,7 @@ class SyncService {
         if (total != null && buffers.length == total) {
           final ordered = List<int>.generate(total!, (i) => i).map((i) => buffers[i]!).toList();
           final merged = _concat(ordered);
-          final key = await _relay.deriveTransferKey(pin: session.pin, password: transferPassword);
+          final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
           final plaintext = await _relay.decryptPayload(key, merged);
           status = SyncStatus.connected;
           _events?.add(SyncEvent.handshakeComplete());
@@ -117,6 +162,135 @@ class SyncService {
     }
     return null;
   }
+
+  // ==================== P2P Sync (WebRTC) ====================
+
+  /// Start P2P sync as initiator (creates invite code)
+  Future<String> startP2pSync({
+    required String transferPassword,
+    required Future<String> Function() getVaultJson,
+  }) async {
+    await init();
+    _currentMode = SyncMode.p2p;
+    status = SyncStatus.signaling;
+    
+    _p2p = P2pPeerService(config: _cfg);
+    
+    // Listen for P2P events
+    _p2p!.states.listen((state) {
+      _log('P2P state: $state');
+      if (state == P2pState.connected) {
+        status = SyncStatus.connected;
+        _events?.add(SyncEvent.handshakeComplete());
+      } else if (state == P2pState.disconnected) {
+        status = SyncStatus.idle;
+      }
+    });
+    
+    _p2p!.messages.listen((msg) async {
+      await _handleP2pMessage(msg, getVaultJson);
+    });
+    
+    final inviteCode = await _p2p!.initAsInitiator(transferPassword: transferPassword);
+    _log('P2P initiator ready with invite code: $inviteCode');
+    
+    return inviteCode;
+  }
+  
+  /// Join P2P sync with invite code
+  Future<void> joinP2pSync({
+    required String inviteCode,
+    required String transferPassword,
+    required Function(String vaultJson) onReceiveData,
+  }) async {
+    await init();
+    _currentMode = SyncMode.p2p;
+    status = SyncStatus.signaling;
+    
+    _p2p = P2pPeerService(config: _cfg);
+    
+    // Listen for P2P events
+    _p2p!.states.listen((state) {
+      _log('P2P state: $state');
+      if (state == P2pState.connected) {
+        status = SyncStatus.connected;
+        _events?.add(SyncEvent.handshakeComplete());
+        // Request sync data once connected
+        _p2p!.sendMessage(P2pMessage.syncRequest());
+      } else if (state == P2pState.disconnected) {
+        status = SyncStatus.idle;
+      }
+    });
+    
+    _p2p!.messages.listen((msg) async {
+      if (msg.type == P2pMessageType.syncData) {
+        final crdtJson = msg.data['crdt'] as String?;
+        if (crdtJson != null) {
+          onReceiveData(crdtJson);
+          _events?.add(SyncEvent.dataReceived());
+          await _p2p!.sendMessage(P2pMessage.syncAck());
+        }
+      }
+    });
+    
+    await _p2p!.initAsJoiner(
+      inviteCode: inviteCode,
+      transferPassword: transferPassword,
+    );
+    
+    // Signal ready to initiator
+    await _p2p!.signalReady();
+    _log('P2P joiner ready');
+  }
+  
+  Future<void> _handleP2pMessage(P2pMessage msg, Future<String> Function() getVaultJson) async {
+    switch (msg.type) {
+      case P2pMessageType.syncRequest:
+        // Send vault data
+        final vaultJson = await getVaultJson();
+        await _p2p!.sendMessage(P2pMessage.syncData(vaultJson));
+        _events?.add(SyncEvent.dataSent());
+        break;
+        
+      case P2pMessageType.syncAck:
+        _log('Sync acknowledged by peer');
+        break;
+        
+      default:
+        break;
+    }
+  }
+
+  // ==================== CRDT Integration ====================
+
+  /// Merge received vault data using CRDT
+  Future<List<CrdtEntry>> mergeVaultData(String vaultJson) async {
+    if (_crdt == null) throw StateError('CRDT not initialized');
+    
+    // Parse received data as CRDT document
+    try {
+      final remote = CrdtDocument.fromJson(jsonDecode(vaultJson) as Map<String, dynamic>);
+      return await _crdt!.mergeRemote(remote);
+    } catch (_) {
+      // Fallback: try to import as legacy JSON array
+      await _crdt!.importFromJson(vaultJson);
+      return [];
+    }
+  }
+  
+  /// Export vault as CRDT document JSON
+  String exportVaultAsCrdt() {
+    if (_crdt == null) throw StateError('CRDT not initialized');
+    return jsonEncode(_crdt!.document!.toJson());
+  }
+  
+  /// Export vault as legacy JSON array
+  String exportVaultAsLegacy() {
+    if (_crdt == null) throw StateError('CRDT not initialized');
+    return _crdt!.exportToJson();
+  }
+
+  // ==================== Utilities ====================
 
   Uint8List _concat(List<Uint8List> parts) {
     final total = parts.fold<int>(0, (a, b) => a + b.length);
@@ -134,6 +308,8 @@ class SyncService {
 
   Future<void> stop() async {
     status = SyncStatus.idle;
+    await _p2p?.close();
+    _p2p = null;
     await _events?.close();
     _events = null;
   }
