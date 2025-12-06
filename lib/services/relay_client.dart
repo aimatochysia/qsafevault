@@ -53,7 +53,10 @@ class RelayClient {
     return base64Encode(digest);
   }
 
-  Future<Uint8List> encryptPayload(SecretKey key, String plaintext) async {
+  /// Encrypt payload with optional return session info for bidirectional sync.
+  /// If [returnInviteCode] is provided, it will be included in the envelope
+  /// so the receiver can use it to send their data back.
+  Future<Uint8List> encryptPayload(SecretKey key, String plaintext, {String? returnInviteCode}) async {
     final aes = AesGcm.with256bits();
     final nonce = _random(12);
     final clear = Uint8List.fromList(utf8.encode(plaintext));
@@ -62,11 +65,14 @@ class RelayClient {
       'v': 1,
       'nonceB64': base64Encode(sb.nonce),
       'ctB64': base64Encode(Uint8List.fromList(sb.cipherText + sb.mac.bytes)),
+      if (returnInviteCode != null) 'returnSession': returnInviteCode,
     };
     return Uint8List.fromList(utf8.encode(jsonEncode(env)));
   }
 
-  Future<String> decryptPayload(SecretKey key, Uint8List envelopeBytes) async {
+  /// Decrypt payload and optionally extract return session info.
+  /// Returns (plaintext, returnInviteCode) where returnInviteCode may be null.
+  Future<({String plaintext, String? returnInviteCode})> decryptPayloadWithReturn(SecretKey key, Uint8List envelopeBytes) async {
     final obj = jsonDecode(utf8.decode(envelopeBytes)) as Map<String, dynamic>;
     final nonce = base64Decode(obj['nonceB64'] as String);
     final ctAll = base64Decode(obj['ctB64'] as String);
@@ -75,7 +81,13 @@ class RelayClient {
     final mac = Mac(ctAll.sublist(ctAll.length - macLen));
     final aes = AesGcm.with256bits();
     final clear = await aes.decrypt(SecretBox(cipherText, nonce: nonce, mac: mac), secretKey: key);
-    return utf8.decode(clear);
+    final returnSession = obj['returnSession'] as String?;
+    return (plaintext: utf8.decode(clear), returnInviteCode: returnSession);
+  }
+
+  Future<String> decryptPayload(SecretKey key, Uint8List envelopeBytes) async {
+    final result = await decryptPayloadWithReturn(key, envelopeBytes);
+    return result.plaintext;
   }
 
   List<Uint8List> chunk(Uint8List bytes, {int size = 32 * 1024}) {

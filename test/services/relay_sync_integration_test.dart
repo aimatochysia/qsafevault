@@ -8,6 +8,7 @@ import 'package:qsafevault/services/sync_service.dart';
 import 'package:qsafevault/config/sync_config.dart';
 
 /// Integration test for relay sync with new server semantics:
+/// - 8-character alphanumeric invite codes (case-sensitive)
 /// - Session persists for 60s TTL
 /// - Session transitions to 'completed' state after all chunks delivered
 /// - Ack key persists separately for 60s even after completion
@@ -27,7 +28,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk', // 8-char alphanumeric
         passwordHash: 'test_hash',
       );
 
@@ -37,7 +38,7 @@ void main() {
       
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -46,14 +47,14 @@ void main() {
       }
 
       // Verify chunks were stored
-      expect(mockServer.hasChunks(session.pin, session.passwordHash), true);
-      expect(mockServer.getChunkCount(session.pin, session.passwordHash), chunks.length);
+      expect(mockServer.hasChunks(session.inviteCode, session.passwordHash), true);
+      expect(mockServer.getChunkCount(session.inviteCode, session.passwordHash), chunks.length);
 
       // Simulate receiver: poll and receive chunks
       final receivedChunks = <int, Uint8List>{};
       for (int i = 0; i < chunks.length; i++) {
         final result = await client.pollNext(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
         );
         expect(result.status, 'chunkAvailable');
@@ -66,19 +67,19 @@ void main() {
 
       // After all chunks delivered, next poll should return 'done'
       final doneResult = await client.pollNext(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
       );
       expect(doneResult.status, 'done');
 
       // Session should be in 'completed' state but ack key should persist
-      expect(mockServer.isSessionCompleted(session.pin, session.passwordHash), true);
+      expect(mockServer.isSessionCompleted(session.inviteCode, session.passwordHash), true);
       
       // Simulate receiver sending ack
-      mockServer.setAcknowledged(session.pin, session.passwordHash, true);
+      mockServer.setAcknowledged(session.inviteCode, session.passwordHash, true);
 
       // Verify ack persists even though session is completed
-      expect(mockServer.isAcknowledged(session.pin, session.passwordHash), true);
+      expect(mockServer.isAcknowledged(session.inviteCode, session.passwordHash), true);
     });
 
     test('Fallback: ack-status fails but receive returns done (should succeed)', () async {
@@ -88,7 +89,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -98,7 +99,7 @@ void main() {
       
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -109,20 +110,20 @@ void main() {
       // Simulate receiver consuming all chunks
       for (int i = 0; i < chunks.length; i++) {
         await client.pollNext(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
         );
       }
 
       // Mark session as completed
-      mockServer.markSessionCompleted(session.pin, session.passwordHash);
+      mockServer.markSessionCompleted(session.inviteCode, session.passwordHash);
 
       // Disable ack-status endpoint (simulate failure)
       mockServer.setAckStatusDisabled(true);
 
       // Fallback: polling receive should return 'done'
       final result = await client.pollNext(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
       );
       expect(result.status, 'done');
@@ -137,7 +138,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -147,7 +148,7 @@ void main() {
       
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -161,14 +162,14 @@ void main() {
       // Polling should return 'waiting'
       for (int i = 0; i < 3; i++) {
         final result = await client.pollNext(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
         );
         expect(result.status, 'chunkAvailable');
       }
 
       // After consuming all, it should still not be acknowledged
-      expect(mockServer.isAcknowledged(session.pin, session.passwordHash), false);
+      expect(mockServer.isAcknowledged(session.inviteCode, session.passwordHash), false);
     });
 
     test('Multiple chunks sent and received correctly', () async {
@@ -178,7 +179,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -193,7 +194,7 @@ void main() {
       // Send all chunks
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -202,13 +203,13 @@ void main() {
       }
 
       // Verify all chunks stored
-      expect(mockServer.getChunkCount(session.pin, session.passwordHash), chunks.length);
+      expect(mockServer.getChunkCount(session.inviteCode, session.passwordHash), chunks.length);
 
       // Receive all chunks
       final receivedChunks = <int, Uint8List>{};
       for (int i = 0; i < chunks.length; i++) {
         final result = await client.pollNext(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
         );
         expect(result.status, 'chunkAvailable');
@@ -230,7 +231,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -239,7 +240,7 @@ void main() {
       final chunks = client.chunk(testData, size: 32);
       
       await client.sendChunk(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
         chunkIndex: 0,
         totalChunks: chunks.length,
@@ -249,7 +250,7 @@ void main() {
       // Try to send same chunk again before it's consumed - should fail
       try {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: 0,
           totalChunks: chunks.length,
@@ -264,23 +265,23 @@ void main() {
 
       // After consuming the chunk, sending it again should work for return transfer
       await client.pollNext(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
       );
 
       // Mark as completed
-      mockServer.markSessionCompleted(session.pin, session.passwordHash);
+      mockServer.markSessionCompleted(session.inviteCode, session.passwordHash);
 
       // Now sending should work again (for return transfer)
       await client.sendChunk(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
         chunkIndex: 0,
         totalChunks: chunks.length,
         chunkData: chunks[0],
       );
 
-      expect(mockServer.hasChunks(session.pin, session.passwordHash), true);
+      expect(mockServer.hasChunks(session.inviteCode, session.passwordHash), true);
     });
 
     test('Session expiry after 60s TTL', () async {
@@ -290,7 +291,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -300,7 +301,7 @@ void main() {
       
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -309,11 +310,11 @@ void main() {
       }
 
       // Simulate TTL expiry
-      mockServer.expireSession(session.pin, session.passwordHash);
+      mockServer.expireSession(session.inviteCode, session.passwordHash);
 
       // Polling should return 'expired'
       final result = await client.pollNext(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
       );
       expect(result.status, 'expired');
@@ -326,7 +327,7 @@ void main() {
       );
 
       final session = RelaySession(
-        pin: '123456',
+        inviteCode: 'Ab3Xy9Zk',
         passwordHash: 'test_hash',
       );
 
@@ -336,7 +337,7 @@ void main() {
       
       for (int i = 0; i < chunks.length; i++) {
         await client.sendChunk(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
           chunkIndex: i,
           totalChunks: chunks.length,
@@ -347,24 +348,24 @@ void main() {
       // Consume all chunks
       for (int i = 0; i < chunks.length; i++) {
         await client.pollNext(
-          pin: session.pin,
+          pin: session.inviteCode,
           passwordHash: session.passwordHash,
         );
       }
 
       // Mark session as completed
-      mockServer.markSessionCompleted(session.pin, session.passwordHash);
-      expect(mockServer.isSessionCompleted(session.pin, session.passwordHash), true);
+      mockServer.markSessionCompleted(session.inviteCode, session.passwordHash);
+      expect(mockServer.isSessionCompleted(session.inviteCode, session.passwordHash), true);
 
       // Set acknowledgment
-      mockServer.setAcknowledged(session.pin, session.passwordHash, true);
+      mockServer.setAcknowledged(session.inviteCode, session.passwordHash, true);
 
       // Verify ack key persists even though session is completed
-      expect(mockServer.isAcknowledged(session.pin, session.passwordHash), true);
+      expect(mockServer.isAcknowledged(session.inviteCode, session.passwordHash), true);
 
       // Verify receive returns 'done' for completed session
       final result = await client.pollNext(
-        pin: session.pin,
+        pin: session.inviteCode,
         passwordHash: session.passwordHash,
       );
       expect(result.status, 'done');
