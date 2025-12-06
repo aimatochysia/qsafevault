@@ -91,7 +91,11 @@ async function pushChunk({ pin, passwordHash, chunkIndex, totalChunks, data }) {
     };
     sessions.set(key, sess);
   } else {
-    if (sess.totalChunks !== totalChunks) {
+    // If session was created by receiver waiting for sender, set totalChunks now
+    if (sess.waitingForSender && sess.totalChunks === null) {
+      sess.totalChunks = totalChunks;
+      sess.waitingForSender = false;
+    } else if (sess.totalChunks !== totalChunks) {
       return { error: 'totalChunks_mismatch', status: 'waiting' };
     }
     if (sess.delivered.has(chunkIndex) || sess.chunks.has(chunkIndex)) {
@@ -111,15 +115,37 @@ async function nextChunk({ pin, passwordHash }) {
   purgeExpired();
   
   const key = sessionKey(inviteCode, passwordHash);
-  const sess = sessions.get(key);
+  let sess = sessions.get(key);
   
   if (!sess) {
-    return { status: 'expired' };
+    // Create a placeholder session so the receiver can start waiting
+    // before the sender pushes chunks. This supports bidirectional sync
+    // where the original sender becomes receiver and starts polling
+    // before the original receiver starts pushing return data.
+    sess = {
+      created: now(),
+      lastTouched: now(),
+      expires: now() + CHUNK_TTL_MS,
+      totalChunks: null, // Will be set when first chunk arrives
+      chunks: new Map(),
+      delivered: new Set(),
+      completed: false,
+      waitingForSender: true, // Mark as waiting for sender to push chunks
+    };
+    sessions.set(key, sess);
+    return { status: 'waiting' };
   }
   
   if (now() - sess.lastTouched > CHUNK_TTL_MS) {
     sessions.delete(key);
     return { status: 'expired' };
+  }
+  
+  // If still waiting for sender to push first chunk
+  if (sess.waitingForSender && sess.totalChunks === null) {
+    sess.lastTouched = now();
+    sess.expires = now() + CHUNK_TTL_MS;
+    return { status: 'waiting' };
   }
   
   // If already completed

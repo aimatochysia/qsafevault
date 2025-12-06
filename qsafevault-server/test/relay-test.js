@@ -307,6 +307,40 @@ async function testInviteCodeCollision() {
   console.log('✓ Invite code collision test passed');
 }
 
+async function testReceiverPollsBeforeSenderPushes() {
+  console.log('Test: Receiver polls before sender pushes (bidirectional return session)');
+  
+  const pin = 'ReturnSe'; // 8-char alphanumeric - return session code
+  const passwordHash = 'bidirHash';
+  const chunkData = 'return_data_chunk';
+  
+  // Receiver (original sender) starts polling BEFORE sender (original receiver) pushes
+  let result = await sessionManager.nextChunk({ pin, passwordHash });
+  assertEqual(result.status, 'waiting', 'Should return waiting when session created by poll');
+  
+  // Poll again - should still be waiting
+  result = await sessionManager.nextChunk({ pin, passwordHash });
+  assertEqual(result.status, 'waiting', 'Should continue waiting for sender');
+  
+  // Now sender pushes chunk
+  result = await sessionManager.pushChunk({
+    pin, passwordHash, chunkIndex: 0, totalChunks: 1, data: chunkData
+  });
+  assertEqual(result.status, 'waiting', 'Push should succeed on pre-created session');
+  
+  // Receiver polls again - should get the chunk
+  result = await sessionManager.nextChunk({ pin, passwordHash });
+  assertEqual(result.status, 'chunkAvailable', 'Should receive chunk after sender pushes');
+  assertEqual(result.chunk.data, chunkData, 'Chunk data should match');
+  assertEqual(result.chunk.totalChunks, 1, 'Total chunks should be 1');
+  
+  // Poll again - should be done
+  result = await sessionManager.nextChunk({ pin, passwordHash });
+  assertEqual(result.status, 'done', 'Should be done after receiving all chunks');
+  
+  console.log('✓ Receiver polls before sender pushes test passed');
+}
+
 // Run all tests
 async function runTests() {
   console.log('=== Running Relay Sync Tests ===\n');
@@ -322,6 +356,7 @@ async function runTests() {
     await testInvalidInviteCodeFormat();
     await testSignalQueueing();
     await testInviteCodeCollision();
+    await testReceiverPollsBeforeSenderPushes();
     
     console.log('\n=== All Tests Passed! ===');
     process.exit(0);
