@@ -149,31 +149,43 @@ class _SyncDialogState extends State<SyncDialog> {
       _generatedInviteCode = null;
     });
     try {
+      // Generate primary invite code for sending
       final genInviteCode = InviteCodeUtils.generate();
+      // Generate return invite code for receiving data back
+      final returnInviteCode = InviteCodeUtils.generate();
+      
       final session = await _sync.createRelaySession(password: pwd, inviteCodeOverride: genInviteCode);
       _inviteCodeCtl.text = session.inviteCode;
       setState(() {
         _generatedInviteCode = session.inviteCode;
         _senderSessionStarted = true;
       });
+      
+      // Send with return session embedded
       await _sync.sendVaultRelay(
         session: session,
         transferPassword: pwd,
         getVaultJson: () async => widget.currentVaultJson,
+        returnInviteCode: returnInviteCode,
       );
       if (!mounted) return;
       setState(() {
-        _status = 'Upload complete. Waiting for other device to receive…';
+        _status = 'Upload complete. Waiting for acknowledgment…';
         _busy = true;
       });
       await _waitForAck(session.inviteCode, pwd);
       if (!mounted) return;
+      
+      // Now switch to receiver mode using the return session
       setState(() {
+        _status = 'Waiting for return data on new session…';
         _role = RelayRole.receiver;
-        _busy = false;
+        _busy = true;
         _error = null;
       });
-      await _startReceive(auto: true, inviteCode: session.inviteCode, pwd: pwd);
+      
+      // Wait for return data on the return session
+      await _receiveOnReturnSession(returnInviteCode, pwd);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -182,6 +194,38 @@ class _SyncDialogState extends State<SyncDialog> {
       });
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+  
+  /// Receive data on the return session (used by original sender)
+  Future<void> _receiveOnReturnSession(String returnInviteCode, String pwd) async {
+    try {
+      final returnSession = await _sync.createRelaySession(password: pwd, inviteCodeOverride: returnInviteCode);
+      final decrypted = await _sync.receiveVaultRelay(
+        session: returnSession,
+        transferPassword: pwd,
+      );
+      if (!mounted) return;
+      if (decrypted == null) {
+        setState(() {
+          _status = 'Return transfer expired or incomplete.';
+          _busy = false;
+        });
+        return;
+      }
+      widget.onReceiveData(decrypted);
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vault synced bidirectionally (relay).')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _status = 'Error receiving return data';
+      });
     }
   }
 
@@ -193,12 +237,13 @@ class _SyncDialogState extends State<SyncDialog> {
     }
     setState(() {
       _busy = true;
-      _status = 'Sending back…';
+      _status = 'Sending back on return session…';
       _error = null;
       _sent = 0;
     });
     try {
       final session = await _sync.createRelaySession(password: pwd, inviteCodeOverride: inviteCode);
+      // No need for return session when sending back - this is the final leg
       await _sync.sendVaultRelay(
         session: session,
         transferPassword: pwd,
@@ -206,12 +251,10 @@ class _SyncDialogState extends State<SyncDialog> {
       );
       if (!mounted) return;
       setState(() {
-        _status = 'Return transfer complete. Waiting for acknowledgment…';
-        _busy = true;
+        _status = 'Return transfer complete!';
+        _busy = false;
       });
-      await _waitForAck(session.inviteCode, pwd);
-      if (!mounted) return;
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -241,12 +284,13 @@ class _SyncDialogState extends State<SyncDialog> {
     });
     try {
       final session = await _sync.createRelaySession(password: usePwd, inviteCodeOverride: useInviteCode);
-      final decrypted = await _sync.receiveVaultRelay(
+      // Use the new method that extracts return session
+      final result = await _sync.receiveVaultRelayWithReturn(
         session: session,
         transferPassword: usePwd,
       );
       if (!mounted) return;
-      if (decrypted == null) {
+      if (result.plaintext == null) {
         setState(() {
           _status = 'Expired or incomplete.';
           _busy = false;
@@ -259,8 +303,23 @@ class _SyncDialogState extends State<SyncDialog> {
       });
       await _sendAck(session.inviteCode, usePwd);
       if (!mounted) return;
-      widget.onReceiveData(decrypted);
-      if (auto) {
+      widget.onReceiveData(result.plaintext!);
+      
+      // Check if there's a return session to send data back
+      if (result.returnInviteCode != null) {
+        setState(() {
+          _role = RelayRole.sender;
+          _busy = false;
+          _error = null;
+          _senderSessionStarted = false;
+          _status = 'Preparing to send your data back…';
+        });
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted) return;
+        // Send back using the return session
+        await _startSendWithInviteCode(result.returnInviteCode!, usePwd);
+      } else if (auto) {
+        // Legacy mode: no return session, just complete
         await Future.delayed(const Duration(milliseconds: 300));
         if (!mounted) return;
         Navigator.of(context).pop();

@@ -92,10 +92,13 @@ class SyncService {
 
   // ==================== Relay-based Sync (HTTP) ====================
 
+  /// Send vault data via relay with optional return session for bidirectional sync.
+  /// If [returnInviteCode] is provided, it's embedded in the payload for the receiver.
   Future<void> sendVaultRelay({
     required RelaySession session,
     required String transferPassword,
     required Future<String> Function() getVaultJson,
+    String? returnInviteCode,
   }) async {
     await init();
     _currentMode = SyncMode.relay;
@@ -103,9 +106,9 @@ class SyncService {
     
     final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
     final vaultJson = await getVaultJson();
-    final envelopeBytes = await _relay.encryptPayload(key, vaultJson);
+    final envelopeBytes = await _relay.encryptPayload(key, vaultJson, returnInviteCode: returnInviteCode);
     final chunks = _relay.chunk(envelopeBytes, size: 32 * 1024);
-    _log('sending chunks=${chunks.length}');
+    _log('sending chunks=${chunks.length} returnSession=${returnInviteCode ?? "none"}');
     for (int i = 0; i < chunks.length; i++) {
       await _relay.sendChunk(
         pin: session.inviteCode,
@@ -119,7 +122,9 @@ class SyncService {
     status = SyncStatus.connected;
   }
 
-  Future<String?> receiveVaultRelay({
+  /// Receive vault data via relay. Returns (plaintext, returnInviteCode) if successful.
+  /// The returnInviteCode can be used to send data back to the original sender.
+  Future<({String? plaintext, String? returnInviteCode})> receiveVaultRelayWithReturn({
     required RelaySession session,
     required String transferPassword,
     Duration? maxWait,
@@ -141,20 +146,34 @@ class SyncService {
           final ordered = List<int>.generate(total!, (i) => i).map((i) => buffers[i]!).toList();
           final merged = _concat(ordered);
           final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
-          final plaintext = await _relay.decryptPayload(key, merged);
+          final result = await _relay.decryptPayloadWithReturn(key, merged);
           status = SyncStatus.connected;
           _events?.add(SyncEvent.handshakeComplete());
-          return plaintext;
+          _log('received data with returnSession=${result.returnInviteCode ?? "none"}');
+          return (plaintext: result.plaintext, returnInviteCode: result.returnInviteCode);
         }
       } else if (r.status == 'done') {
         break;
       } else if (r.status == 'expired') {
         _log('session expired');
-        return null;
+        return (plaintext: null, returnInviteCode: null);
       }
       await Future.delayed(_jitter(_cfg.pollInterval));
     }
-    return null;
+    return (plaintext: null, returnInviteCode: null);
+  }
+
+  Future<String?> receiveVaultRelay({
+    required RelaySession session,
+    required String transferPassword,
+    Duration? maxWait,
+  }) async {
+    final result = await receiveVaultRelayWithReturn(
+      session: session,
+      transferPassword: transferPassword,
+      maxWait: maxWait,
+    );
+    return result.plaintext;
   }
 
   // ==================== P2P Sync (WebRTC) ====================
