@@ -4,16 +4,29 @@ import 'package:ffi/ffi.dart';
 
 /// Load the native crypto library based on platform
 ffi.DynamicLibrary loadCryptoLibrary() {
+  // Try release build first, fall back to debug
   if (Platform.isLinux) {
-    return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.so');
+    try {
+      return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.so');
+    } catch (_) {
+      return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.so');
+    }
   } else if (Platform.isAndroid) {
     return ffi.DynamicLibrary.open('libcrypto_engine.so');
   } else if (Platform.isMacOS) {
-    return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.dylib');
+    try {
+      return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.dylib');
+    } catch (_) {
+      return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.dylib');
+    }
   } else if (Platform.isIOS) {
     return ffi.DynamicLibrary.process();
   } else if (Platform.isWindows) {
-    return ffi.DynamicLibrary.open('crypto_engine/target/debug/crypto_engine.dll');
+    try {
+      return ffi.DynamicLibrary.open('crypto_engine/target/release/crypto_engine.dll');
+    } catch (_) {
+      return ffi.DynamicLibrary.open('crypto_engine/target/debug/crypto_engine.dll');
+    }
   } else {
     throw UnsupportedError('Unsupported platform');
   }
@@ -89,6 +102,13 @@ typedef NativeFreeHandle = ffi.Int32 Function(ffi.Uint64 handle);
 typedef NativeFreeMemory = ffi.Void Function(ffi.Pointer<ffi.Uint8> ptr);
 typedef NativeFreeString = ffi.Void Function(ffi.Pointer<ffi.Char> ptr);
 
+typedef NativeGetBackendInfo = ffi.Int32 Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> infoOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef NativeInitLogging = ffi.Int32 Function(ffi.Int32 level);
+
 /// Dart function signatures
 typedef DartGenerateKeypair = int Function(
   ffi.Pointer<ffi.Uint64> keypairHandleOut,
@@ -152,3 +172,10 @@ typedef DartDecryptVault = int Function(
 typedef DartFreeHandle = int Function(int handle);
 typedef DartFreeMemory = void Function(ffi.Pointer<ffi.Uint8> ptr);
 typedef DartFreeString = void Function(ffi.Pointer<ffi.Char> ptr);
+
+typedef DartGetBackendInfo = int Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> infoOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef DartInitLogging = int Function(int level);

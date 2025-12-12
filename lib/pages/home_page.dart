@@ -13,6 +13,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import '../services/app_logger.dart';
+import '../services/crypto_backend_notifier.dart';
+import '../ffi/rust_crypto_service.dart';
 class HomePage extends StatefulWidget {
   final StorageService storage;
   final CryptoService cryptoService;
@@ -45,6 +47,11 @@ class _HomePageState extends State<HomePage> {
       _entries = [];
     }
     _loadLogDir();
+    
+    // Show backend status notification
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showBackendStatus();
+    });
   }
   Future<void> _loadLogDir() async {
     try {
@@ -58,6 +65,16 @@ class _HomePageState extends State<HomePage> {
         }
       }
     } catch (_) {}
+  }
+  
+  void _showBackendStatus() {
+    try {
+      final rustCrypto = RustCryptoService();
+      CryptoBackendNotifier.instance.showBackendStatus(context, rustCrypto);
+    } catch (e) {
+      // Silently fail - this is informational only
+      debugPrint('Failed to show backend status: $e');
+    }
   }
   Future<void> _saveLogDir(String p) async {
     try {

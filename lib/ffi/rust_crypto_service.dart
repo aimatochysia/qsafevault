@@ -17,6 +17,8 @@ class RustCryptoService {
   late final DartFreeHandle _freeHandle;
   late final DartFreeMemory _freeMemory;
   late final DartFreeString _freeString;
+  late final DartGetBackendInfo _getBackendInfo;
+  late final DartInitLogging _initLogging;
 
   RustCryptoService() {
     _lib = loadCryptoLibrary();
@@ -59,6 +61,14 @@ class RustCryptoService {
     
     _freeString = _lib
         .lookup<ffi.NativeFunction<NativeFreeString>>('pqcrypto_free_string')
+        .asFunction();
+    
+    _getBackendInfo = _lib
+        .lookup<ffi.NativeFunction<NativeGetBackendInfo>>('pqcrypto_get_backend_info')
+        .asFunction();
+    
+    _initLogging = _lib
+        .lookup<ffi.NativeFunction<NativeInitLogging>>('pqcrypto_init_logging')
         .asFunction();
   }
 
@@ -390,6 +400,38 @@ class RustCryptoService {
   /// Free a keypair handle
   void freeHandle(int handle) {
     _freeHandle(handle);
+  }
+
+  /// Get backend information (TPM2, SoftHSM detection status)
+  String getBackendInfo() {
+    final infoPtr = calloc<ffi.Pointer<ffi.Char>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _getBackendInfo(infoPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('Failed to get backend info: $error');
+      }
+
+      if (infoPtr.value != ffi.nullptr) {
+        final info = infoPtr.value.cast<Utf8>().toDartString();
+        _freeString(infoPtr.value);
+        return info;
+      }
+      return '{}';
+    } finally {
+      calloc.free(infoPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Initialize logging system
+  /// Level: 0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace
+  void initLogging(int level) {
+    _initLogging(level);
   }
 
   String _getError(ffi.Pointer<ffi.Pointer<ffi.Char>> errorPtr) {
