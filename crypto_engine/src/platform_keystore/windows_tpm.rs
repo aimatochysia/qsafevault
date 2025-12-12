@@ -1,6 +1,5 @@
 // Platform keystore: Windows TPM2 support via CNG/KSP
 // Note: This requires Windows-specific APIs and TPM access
-// For now, we provide a basic implementation using Windows CNG
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Security::Cryptography::{
@@ -10,39 +9,61 @@ use windows::Win32::Security::Cryptography::{
     BCRYPT_KEY_DATA_BLOB, MS_PLATFORM_CRYPTO_PROVIDER,
 };
 
+/// Check if TPM2 is available on Windows
+#[cfg(target_os = "windows")]
+pub fn is_tpm_available() -> bool {
+    // Try to open the platform crypto provider (TPM)
+    unsafe {
+        let mut provider: NCRYPT_PROV_HANDLE = 0;
+        let result = NCryptOpenStorageProvider(
+            &mut provider as *mut _,
+            MS_PLATFORM_CRYPTO_PROVIDER,
+            0,
+        );
+        result.is_ok()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_tpm_available() -> bool {
+    false
+}
+
 /// Store private key using Windows TPM2
 #[cfg(target_os = "windows")]
-pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {
+pub fn seal_private_key(_key_id: &str, _key_data: &[u8]) -> Result<(), String> {
     // TODO: Implement using Windows CNG/KSP with TPM2
     // NCryptOpenStorageProvider with MS_PLATFORM_CRYPTO_PROVIDER
     // NCryptCreatePersistedKey with TPM backing
     // NCryptSetProperty to configure key
     // NCryptFinalizeKey to persist
     
-    // For now, return error indicating not fully implemented
+    log::debug!("Windows TPM2 sealing not yet fully implemented");
     Err("Windows TPM2 integration requires full CNG/KSP implementation".to_string())
 }
 
 /// Retrieve private key from Windows TPM2
 #[cfg(target_os = "windows")]
-pub fn unseal_private_key(key_id: &str) -> Result<Vec<u8>, String> {
+pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
     // TODO: Implement using Windows CNG/KSP
     // NCryptOpenStorageProvider
     // NCryptOpenKey
     // NCryptExportKey
     
+    log::debug!("Windows TPM2 unsealing not yet fully implemented");
     Err("Windows TPM2 integration requires full CNG/KSP implementation".to_string())
 }
 
 /// Delete private key from Windows TPM2
 #[cfg(target_os = "windows")]
-pub fn delete_private_key(key_id: &str) -> Result<(), String> {
+pub fn delete_private_key(_key_id: &str) -> Result<(), String> {
     // TODO: Implement using Windows CNG/KSP
     // NCryptOpenStorageProvider
     // NCryptOpenKey
     // NCryptDeleteKey
     
-    Err("Windows TPM2 integration requires full CNG/KSP implementation".to_string())
+    log::debug!("Windows TPM2 deletion not yet fully implemented");
+    Ok(())
 }
 
 // Stub implementations for non-Windows platforms

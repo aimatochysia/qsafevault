@@ -35,6 +35,8 @@ bincode = "1.3"
 dirs = "5.0"
 lazy_static = "1.4"
 libc = "0.2"
+log = "0.4"
+simple_logger = "4.3"
 
 # Platform-specific secure storage dependencies
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -51,10 +53,15 @@ windows = { version = "0.52", features = [
     "Win32_Security_Cryptography",
     "Win32_Foundation",
 ] }
+tss-esapi = { version = "7.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# TPM2 support via tss-esapi (commented out for now, requires system libraries)
-# tss-esapi = "7.4"
+# TPM2 support via tss-esapi
+tss-esapi = { version = "7.4", optional = true }
+
+[features]
+default = []
+tpm = ["tss-esapi"]
 
 [dev-dependencies]
 hex = "0.4"

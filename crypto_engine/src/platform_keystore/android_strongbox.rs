@@ -2,6 +2,18 @@
 // Note: This requires JNI and Android Keystore API integration
 // For now, we provide a stub that should be implemented with proper JNI bindings
 
+/// Check if Android StrongBox is available
+#[cfg(target_os = "android")]
+pub fn is_strongbox_available() -> bool {
+    // TODO: Implement using JNI to check KeyStore capabilities
+    false
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn is_strongbox_available() -> bool {
+    false
+}
+
 /// Store private key in Android StrongBox Keystore
 #[cfg(target_os = "android")]
 pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {

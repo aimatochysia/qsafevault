@@ -1,11 +1,11 @@
 // Sealed storage: Versioned sealed blob logic
 use serde::{Serialize, Deserialize};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Version identifier for sealed blobs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlobVersion {
     V1,
+    V2, // Multi-backend support
 }
 
 /// Algorithm identifier for sealed blobs
@@ -15,6 +15,23 @@ pub enum AlgorithmId {
     Aes256Gcm,
 }
 
+/// Backend identifier for sealed blobs
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackendType {
+    TPM,
+    SoftHSM,
+    TPMAndSoftHSM, // Dual-sealing
+    Fallback,
+}
+
+/// KDF information for sealed blobs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KdfInfo {
+    pub algorithm: String,
+    pub iterations: Option<u32>,
+    pub salt: Option<Vec<u8>>,
+}
+
 /// Metadata for sealed blobs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobMetadata {
@@ -22,6 +39,9 @@ pub struct BlobMetadata {
     pub algorithm: AlgorithmId,
     pub created_at: u64, // Unix timestamp
     pub key_id: Option<String>,
+    pub backend: BackendType,
+    pub kdf_info: Option<KdfInfo>,
+    pub pkcs11_slot: Option<u64>,
 }
 
 /// Sealed blob containing encrypted data with metadata
@@ -46,6 +66,37 @@ impl SealedBlob {
                 .unwrap()
                 .as_secs(),
             key_id,
+            backend: BackendType::Fallback,
+            kdf_info: None,
+            pkcs11_slot: None,
+        };
+        
+        Self {
+            metadata,
+            ciphertext,
+        }
+    }
+
+    /// Create a new sealed blob with backend information
+    pub fn new_with_backend(
+        algorithm: AlgorithmId,
+        ciphertext: Vec<u8>,
+        key_id: Option<String>,
+        backend: BackendType,
+        kdf_info: Option<KdfInfo>,
+        pkcs11_slot: Option<u64>,
+    ) -> Self {
+        let metadata = BlobMetadata {
+            version: BlobVersion::V2,
+            algorithm,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            key_id,
+            backend,
+            kdf_info,
+            pkcs11_slot,
         };
         
         Self {
@@ -77,7 +128,7 @@ impl SealedBlob {
     /// Verify the blob version is supported
     pub fn verify_version(&self) -> Result<(), String> {
         match self.metadata.version {
-            BlobVersion::V1 => Ok(()),
+            BlobVersion::V1 | BlobVersion::V2 => Ok(()),
         }
     }
 

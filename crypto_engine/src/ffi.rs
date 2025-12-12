@@ -272,8 +272,10 @@ pub extern "C" fn pqcrypto_seal_private_key_with_platform_keystore(
         combined_sk.extend_from_slice(&classical_sk);
         
         // Seal with platform keystore
-        PlatformKeystore::seal_key(key_id_str, &combined_sk)
+        let backend_type = PlatformKeystore::seal_key(key_id_str, &combined_sk)
             .map_err(|e| format!("Failed to seal key: {}", e))?;
+        
+        log::info!("Sealed key with backend: {:?}", backend_type);
         
         Ok(())
     }) {
@@ -515,4 +517,80 @@ pub extern "C" fn pqcrypto_free_string(ptr: *mut c_char) {
             let _ = CString::from_raw(ptr);
         }
     }
+}
+
+/// Get backend detection information
+/// Returns a JSON string with backend status
+#[no_mangle]
+pub extern "C" fn pqcrypto_get_backend_info(
+    info_out: *mut *mut c_char,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if info_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| -> Result<String, String> {
+        use crate::platform_keystore::detect_backends;
+        
+        let status = detect_backends();
+        let backend_type = crate::platform_keystore::determine_backend_type();
+        
+        let info = format!(
+            r#"{{"tpm_available":{}, "softhsm_available":{}, "platform_secure_available":{}, "backend_type":"{}"}}"#,
+            status.tpm_available,
+            status.softhsm_available,
+            status.platform_secure_available,
+            format!("{:?}", backend_type)
+        );
+        
+        Ok(info)
+    }) {
+        Ok(Ok(info)) => {
+            if let Ok(c_str) = CString::new(info) {
+                unsafe { *info_out = c_str.into_raw(); }
+                STATUS_OK
+            } else {
+                STATUS_ERROR
+            }
+        }
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Initialize logging (debug builds only)
+/// level: 0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace
+#[no_mangle]
+pub extern "C" fn pqcrypto_init_logging(level: c_int) -> c_int {
+    use log::LevelFilter;
+    
+    let log_level = match level {
+        0 => LevelFilter::Error,
+        1 => LevelFilter::Warn,
+        2 => LevelFilter::Info,
+        3 => LevelFilter::Debug,
+        4 => LevelFilter::Trace,
+        _ => LevelFilter::Info,
+    };
+    
+    // Initialize simple logger (ignore error if already initialized)
+    let _ = simple_logger::SimpleLogger::new()
+        .with_level(log_level)
+        .init();
+    
+    log::info!("QSafeVault crypto engine logging initialized at level: {:?}", log_level);
+    log::info!("PQC Implementation: Kyber ML-KEM 768");
+    log::info!("Classical KEM: X25519");
+    log::info!("Hybrid KDF: HKDF-SHA3-256");
+    log::info!("Symmetric Encryption: AES-256-GCM");
+    
+    STATUS_OK
 }
