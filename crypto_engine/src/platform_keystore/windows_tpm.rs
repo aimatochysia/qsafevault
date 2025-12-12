@@ -3,10 +3,9 @@
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Security::Cryptography::{
-    NCryptOpenStorageProvider, NCryptCreatePersistedKey, NCryptSetProperty,
-    NCryptFinalizeKey, NCryptDeleteKey, NCryptOpenKey, NCryptExportKey,
-    NCRYPT_PROV_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_MACHINE_KEY_FLAG,
-    BCRYPT_KEY_DATA_BLOB, MS_PLATFORM_CRYPTO_PROVIDER,
+    NCryptOpenStorageProvider,
+    NCRYPT_PROV_HANDLE,
+    MS_PLATFORM_CRYPTO_PROVIDER,
 };
 
 /// Check if TPM2 is available on Windows
@@ -14,9 +13,9 @@ use windows::Win32::Security::Cryptography::{
 pub fn is_tpm_available() -> bool {
     // Try to open the platform crypto provider (TPM)
     unsafe {
-        let mut provider: NCRYPT_PROV_HANDLE = 0;
+        let mut provider = NCRYPT_PROV_HANDLE::default();
         let result = NCryptOpenStorageProvider(
-            &mut provider as *mut _,
+            &mut provider,
             MS_PLATFORM_CRYPTO_PROVIDER,
             0,
         );

@@ -1,13 +1,11 @@
 // Platform keystore: Linux TPM2 support via tpm2-tss
 // Note: This requires system TPM2 libraries and tss-esapi crate
 
-use std::path::Path;
-
 /// Check if TPM2 is available on Linux
 #[cfg(target_os = "linux")]
 pub fn is_tpm_available() -> bool {
     // Check for TPM device nodes
-    Path::new("/dev/tpm0").exists() || Path::new("/dev/tpmrm0").exists()
+    std::path::Path::new("/dev/tpm0").exists() || std::path::Path::new("/dev/tpmrm0").exists()
 }
 
 #[cfg(not(target_os = "linux"))]
