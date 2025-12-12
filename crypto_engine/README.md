@@ -41,6 +41,212 @@ Production-grade cryptographic backend for QSafeVault password manager, implemen
 └─────────────────────────────────────────────────┘
 ```
 
+## Secure Backend Auto-Detection
+
+The crypto engine automatically detects and uses the best available secure storage backend on your system.
+
+### Backend Priority Order
+
+When sealing keys, the engine uses this priority order:
+
+1. **BOTH TPM2 + SoftHSM** (Dual-sealing for maximum security)
+   - Keys are wrapped with both backends simultaneously
+   - Either backend can independently decrypt
+   - Maximum protection against single backend compromise
+
+2. **TPM2 only** (Hardware-backed security)
+   - Windows: Uses TPM2 via CNG/KSP
+   - Linux: Uses TPM2 via device nodes (/dev/tpm0, /dev/tpmrm0)
+   - Non-extractable keys when available
+
+3. **SoftHSM only** (PKCS#11 simulation)
+   - Useful for development and testing
+   - Provides PKCS#11 interface without hardware
+   - Library auto-detected on common paths
+
+4. **Platform-Specific** (iOS/macOS/Android native)
+   - iOS: Secure Enclave + Keychain
+   - macOS: Keychain (with T2/Secure Enclave support)
+   - Android: StrongBox Keystore (when available)
+
+5. **Software Fallback** (Filesystem-based)
+   - Used when no secure hardware available
+   - Files stored in ~/.qsafevault/keystore
+   - Restricted permissions (600 on Unix)
+   - Still uses AES-256-GCM encryption
+
+### Detection Examples
+
+**Linux with TPM2:**
+```
+Backend detection:
+  TPM2: YES
+  SoftHSM: NO
+  Platform Secure: NO
+Using TPM2 only
+```
+
+**macOS with SoftHSM installed:**
+```
+Backend detection:
+  TPM2: NO
+  SoftHSM: YES
+  Platform Secure: YES
+Using SoftHSM only
+```
+
+**Linux with both TPM2 and SoftHSM:**
+```
+Backend detection:
+  TPM2: YES
+  SoftHSM: YES
+  Platform Secure: NO
+Using BOTH TPM2 + SoftHSM (dual-sealing)
+```
+
+### Sealed Blob Format
+
+Version 2 blobs include backend metadata:
+
+```json
+{
+  "version": "V2",
+  "algorithm": "HybridKemAes256Gcm",
+  "backend": "TPMAndSoftHSM",
+  "kdf_info": {
+    "algorithm": "HKDF-SHA3-256"
+  },
+  "pkcs11_slot": null,
+  "created_at": 1234567890,
+  "key_id": "vault_master_key",
+  "ciphertext": "..."
+}
+```
+
+### Setting Up Secure Backends
+
+#### Linux TPM2 Setup
+
+1. Check TPM availability:
+   ```bash
+   ls -l /dev/tpm0 /dev/tpmrm0
+   ```
+
+2. Install TPM2 tools (optional, for testing):
+   ```bash
+   sudo apt-get install tpm2-tools
+   ```
+
+3. Build with TPM support:
+   ```bash
+   cargo build --release --features tpm
+   ```
+
+#### SoftHSM Setup
+
+**Linux:**
+```bash
+# Install SoftHSM
+sudo apt-get install softhsm2
+
+# Initialize token
+softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin 1234
+
+# Verify
+softhsm2-util --show-slots
+```
+
+**macOS:**
+```bash
+# Install via Homebrew
+brew install softhsm
+
+# Initialize token
+softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin 1234
+```
+
+**Windows:**
+```powershell
+# Download from https://github.com/opendnssec/SoftHSMv2/releases
+# Install to C:\SoftHSM2
+
+# Add to PATH
+$env:Path += ";C:\SoftHSM2\bin"
+
+# Initialize token
+softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin 1234
+```
+
+#### Verifying Detection
+
+Use the FFI function to check backend status:
+
+```c
+char* info = NULL;
+char* error = NULL;
+int status = pqcrypto_get_backend_info(&info, &error);
+if (status == 0) {
+    printf("Backend info: %s\n", info);
+    pqcrypto_free_string(info);
+}
+```
+
+Output example:
+```json
+{
+  "tpm_available": true,
+  "softhsm_available": true,
+  "platform_secure_available": false,
+  "backend_type": "TPMAndSoftHSM"
+}
+```
+
+## Debug Logging
+
+### Enabling Logs
+
+Initialize logging from your application:
+
+```c
+// Set log level: 0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace
+pqcrypto_init_logging(2);  // Info level
+```
+
+### What Gets Logged
+
+**Safe to log (and logged):**
+- ✅ Backend detection results
+- ✅ Algorithm identifiers (Kyber ML-KEM 768, X25519, etc.)
+- ✅ Operation types (seal, unseal, encrypt, decrypt)
+- ✅ Blob version and metadata
+- ✅ Success/failure status
+
+**Never logged (security-critical):**
+- ❌ Raw cryptographic keys
+- ❌ Shared secrets
+- ❌ Master keys or session keys
+- ❌ Plaintext data
+- ❌ Internal entropy or random values
+- ❌ Unsealed key material
+
+### Example Log Output
+
+```
+INFO  QSafeVault crypto engine logging initialized at level: Info
+INFO  PQC Implementation: Kyber ML-KEM 768
+INFO  Classical KEM: X25519
+INFO  Hybrid KDF: HKDF-SHA3-256
+INFO  Symmetric Encryption: AES-256-GCM
+INFO  Backend detection:
+INFO    TPM2: YES
+INFO    SoftHSM: YES
+INFO    Platform Secure: NO
+INFO  Using BOTH TPM2 + SoftHSM (dual-sealing)
+INFO  Sealing key with backend: TPMAndSoftHSM
+DEBUG Dual-sealing key with TPM2 + SoftHSM
+INFO  Successfully dual-sealed key
+```
+
 ## Building
 
 ### Prerequisites

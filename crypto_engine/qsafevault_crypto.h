@@ -183,6 +183,48 @@ void pqcrypto_free_memory(uint8_t *ptr);
  */
 void pqcrypto_free_string(char *ptr);
 
+/**
+ * Get backend detection information
+ * Returns a JSON string with available backends and active backend type
+ * 
+ * @param info_out Output: JSON string with backend info (caller must free with pqcrypto_free_string)
+ * @param error_msg_out Output: error message if failed (caller must free with pqcrypto_free_string)
+ * @return Status code
+ * 
+ * Example output:
+ * {
+ *   "tpm_available": true,
+ *   "softhsm_available": true,
+ *   "platform_secure_available": false,
+ *   "backend_type": "TPMAndSoftHSM"
+ * }
+ */
+int32_t pqcrypto_get_backend_info(
+    char **info_out,
+    char **error_msg_out
+);
+
+/**
+ * Initialize logging system
+ * Call this before other functions to enable debug logging
+ * 
+ * @param level Log level: 0=Error, 1=Warn, 2=Info, 3=Debug, 4=Trace
+ * @return Status code
+ * 
+ * Logs include:
+ * - Backend detection results
+ * - Algorithm identifiers
+ * - Operation types
+ * - Success/failure status
+ * 
+ * Never logs:
+ * - Raw cryptographic keys
+ * - Shared secrets
+ * - Plaintext data
+ * - Internal entropy
+ */
+int32_t pqcrypto_init_logging(int32_t level);
+
 #ifdef __cplusplus
 }
 #endif
