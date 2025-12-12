@@ -52,12 +52,16 @@ jni = "0.21"
 windows = { version = "0.52", features = [
     "Win32_Security_Cryptography",
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
 ] }
-tss-esapi = { version = "7.4", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # TPM2 support via tss-esapi
 tss-esapi = { version = "7.4", optional = true }
+
+# PKCS#11 support for SoftHSM (all desktop platforms)
+[target.'cfg(not(target_os = "android"))'.dependencies]
+pkcs11 = "0.5"
 
 [features]
 default = []

@@ -9,6 +9,19 @@ pub mod linux_tpm;
 pub mod fallback_software;
 pub mod softhsm_pkcs11;
 
+// Platform-specific implementation modules (conditionally compiled)
+#[cfg(not(target_os = "android"))]
+pub mod softhsm_pkcs11_impl;
+
+#[cfg(target_os = "windows")]
+pub mod windows_tpm_impl;
+
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+pub mod linux_tpm_impl;
+
+#[cfg(target_os = "android")]
+pub mod android_strongbox_impl;
+
 use crate::sealed_storage::BackendType;
 
 /// Backend availability status
