@@ -10,10 +10,20 @@ class CryptoBackendNotifier {
   CryptoBackendNotifier._internal();
 
   /// Show backend status as a fleeting snackbar notification
-  void showBackendStatus(BuildContext context, RustCryptoService cryptoService) {
+  void showBackendStatus(BuildContext context, RustCryptoService? cryptoService) {
     try {
+      if (cryptoService == null) {
+        debugPrint('RustCryptoService not available, skipping backend status notification');
+        return;
+      }
+
       // Initialize logging at Info level
-      cryptoService.initLogging(2);
+      try {
+        cryptoService.initLogging(2);
+      } catch (e) {
+        debugPrint('Failed to initialize logging: $e');
+        // Continue anyway, logging is optional
+      }
 
       // Get backend information
       final backendInfoJson = cryptoService.getBackendInfo();

@@ -4,31 +4,54 @@ import 'package:ffi/ffi.dart';
 
 /// Load the native crypto library based on platform
 ffi.DynamicLibrary loadCryptoLibrary() {
-  // Try release build first, fall back to debug
   if (Platform.isLinux) {
+    // Desktop Linux: Try release build first, fall back to debug
     try {
       return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.so');
     } catch (_) {
       return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.so');
     }
   } else if (Platform.isAndroid) {
-    return ffi.DynamicLibrary.open('libcrypto_engine.so');
+    // Android: Library must be bundled in android/app/src/main/jniLibs/<abi>/libcrypto_engine.so
+    // Flutter will automatically find it when we just use the library name
+    try {
+      return ffi.DynamicLibrary.open('libcrypto_engine.so');
+    } catch (e) {
+      // If Rust library not found, throw descriptive error
+      throw UnsupportedError(
+        'Rust crypto library not found on Android. '
+        'Please build the Rust library for Android and place it in android/app/src/main/jniLibs/. '
+        'Error: $e'
+      );
+    }
   } else if (Platform.isMacOS) {
+    // Desktop macOS: Try release build first, fall back to debug
     try {
       return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.dylib');
     } catch (_) {
       return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.dylib');
     }
   } else if (Platform.isIOS) {
-    return ffi.DynamicLibrary.process();
+    // iOS: Library must be embedded in the app bundle as a framework
+    // Use DynamicLibrary.process() to access symbols from the app itself
+    try {
+      return ffi.DynamicLibrary.process();
+    } catch (e) {
+      throw UnsupportedError(
+        'Rust crypto library not found on iOS. '
+        'Please build the Rust library for iOS and link it with the app. '
+        'Error: $e'
+      );
+    }
   } else if (Platform.isWindows) {
+    // Desktop Windows: Try release build first, fall back to debug
     try {
       return ffi.DynamicLibrary.open('crypto_engine/target/release/crypto_engine.dll');
     } catch (_) {
       return ffi.DynamicLibrary.open('crypto_engine/target/debug/crypto_engine.dll');
     }
   } else {
-    throw UnsupportedError('Unsupported platform');
+    throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
 }
 

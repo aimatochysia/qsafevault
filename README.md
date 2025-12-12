@@ -109,6 +109,60 @@ Build release
 - Android (APK): flutter build apk --release
 - Android (AAB): flutter build appbundle --release
 
+### Building Rust Crypto Library for Mobile
+
+The desktop platforms (Windows, Linux, macOS) use the Rust crypto library from `crypto_engine/target/release/` automatically. For mobile platforms, you need to build and bundle the Rust library separately:
+
+#### Android
+
+**Prerequisites:**
+- Rust toolchain installed (`https://rustup.rs/`)
+- Android NDK (automatically installed with Android Studio)
+- Set `ANDROID_NDK_HOME` or `NDK_HOME` environment variable
+
+**Build:**
+```bash
+./build_crypto_android.sh
+```
+
+This script:
+- Builds the Rust library for all Android ABIs (arm64-v8a, armeabi-v7a, x86_64, x86)
+- Places libraries in `android/app/src/main/jniLibs/<abi>/libcrypto_engine.so`
+- The Flutter app will automatically find and load them
+
+**Then build your Flutter app normally:**
+```bash
+flutter build apk --release
+# or
+flutter build appbundle --release
+```
+
+#### iOS
+
+**Prerequisites:**
+- Rust toolchain installed (`https://rustup.rs/`)
+- macOS with Xcode installed
+- iOS targets added to Rust
+
+**Build:**
+```bash
+./build_crypto_ios.sh
+```
+
+This script:
+- Builds the Rust library for iOS devices and simulators
+- Creates an XCFramework at `ios/Frameworks/CryptoEngine.xcframework`
+- You may need to link this in Xcode (open `ios/Runner.xcworkspace`)
+
+**Then build your Flutter app normally:**
+```bash
+flutter build ios --release
+# or
+flutter build ipa --release
+```
+
+**Note:** Backend status notifications (TPM2/SoftHSM detection popup) only appear when the Rust library is successfully built and bundled. On mobile without the Rust library, the app uses the existing Dart cryptography implementation and notifications are silently skipped.
+
 CI/CD
 - See .github/workflows/flutter_build.yml for multi‑platform builds and release packaging.
 

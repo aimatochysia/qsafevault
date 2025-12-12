@@ -47,7 +47,15 @@ class _HomePageState extends State<HomePage> {
   
   void _showBackendStatus() {
     try {
-      final rustCrypto = RustCryptoService();
+      RustCryptoService? rustCrypto;
+      try {
+        rustCrypto = RustCryptoService();
+      } catch (e) {
+        // Library not available on this platform (e.g., Android/iOS without bundled lib)
+        debugPrint('RustCryptoService not available: $e');
+        rustCrypto = null;
+      }
+      
       CryptoBackendNotifier.instance.showBackendStatus(context, rustCrypto);
     } catch (e) {
       // Silently fail - this is informational only
