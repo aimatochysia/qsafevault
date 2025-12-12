@@ -7,12 +7,6 @@ import 'package:cryptography/cryptography.dart';
 import '/widgets/entry_form.dart';
 import '/widgets/sync_dialog.dart';
 import 'package:qsafevault/services/theme_service.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
-import '../services/app_logger.dart';
 import '../services/crypto_backend_notifier.dart';
 import '../ffi/rust_crypto_service.dart';
 class HomePage extends StatefulWidget {
@@ -36,8 +30,6 @@ class _HomePageState extends State<HomePage> {
   late List<PasswordEntry> _entries;
   String _searchQuery = "";
   bool _saving = false;
-  String? _logDir;
-  final Random _rand = Random.secure();
   @override
   void initState() {
     super.initState();
@@ -46,25 +38,11 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {
       _entries = [];
     }
-    _loadLogDir();
     
     // Show backend status notification
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showBackendStatus();
     });
-  }
-  Future<void> _loadLogDir() async {
-    try {
-      final docs = await getApplicationDocumentsDirectory();
-      final f = File('${docs.path}/logdir.txt');
-      if (await f.exists()) {
-        final p = (await f.readAsString()).trim();
-        if (p.isNotEmpty) {
-          final ok = await AppLogger.instance.setDirectory(p);
-          if (ok) setState(() => _logDir = p);
-        }
-      }
-    } catch (_) {}
   }
   
   void _showBackendStatus() {
@@ -76,32 +54,7 @@ class _HomePageState extends State<HomePage> {
       debugPrint('Failed to show backend status: $e');
     }
   }
-  Future<void> _saveLogDir(String p) async {
-    try {
-      final docs = await getApplicationDocumentsDirectory();
-      final f = File('${docs.path}/logdir.txt');
-      await f.writeAsString(p, flush: true);
-    } catch (_) {}
-  }
-  Future<void> _chooseLogFolder() async {
-    try {
-      final picked = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select log output folder');
-      if (picked == null || picked.isEmpty) return;
-      final ok = await AppLogger.instance.setDirectory(picked);
-      if (!ok) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to set log folder')));
-        return;
-      }
-      await _saveLogDir(picked);
-      if (!mounted) return;
-      setState(() => _logDir = picked);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Logging to: $picked/${AppLogger.instance.logFileName}')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Log folder error: $e')));
-    }
-  }
+  
   List<PasswordEntry> get _filteredEntries {
     if (_searchQuery.isEmpty) return _entries;
     final q = _searchQuery.toLowerCase();
@@ -224,70 +177,6 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
-  }
-  
-  String _randomPassword(int length) {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#\$%^&*()-_=+[]{};:,.<>?';
-    return List.generate(length, (_) => chars[_rand.nextInt(chars.length)]).join();
-  }
-
-  String _randomUsername() {
-    const letters = 'abcdefghijklmnopqrstuvwxyz';
-    const alnum = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final len = 6 + _rand.nextInt(7);
-    final first = letters[_rand.nextInt(letters.length)];
-    final rest = List.generate(len - 1, (_) => alnum[_rand.nextInt(alnum.length)]).join();
-    return first + rest;
-  }
-
-  String _randomDomain() {
-    const letters = 'abcdefghijklmnopqrstuvwxyz';
-    const tlds = ['com', 'net', 'org', 'io', 'app', 'dev', 'site', 'tech', 'cloud'];
-    final sldLen = 5 + _rand.nextInt(7);
-    final sld = List.generate(sldLen, (_) => letters[_rand.nextInt(letters.length)]).join();
-    final tld = tlds[_rand.nextInt(tlds.length)];
-    return '$sld.$tld';
-  }
-
-  Future<void> _generateHundredEntries() async {
-    try {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final List<Map<String, String>> data = [];
-      for (var i = 0; i < 100; i++) {
-        final domain = _randomDomain();
-        final username = _randomUsername();
-        final email = '$username@$domain';
-        data.add({
-          'id': 'gen_${now}_$i',
-          'site': domain,
-          'username': username,
-          'email': email,
-          'password': _randomPassword(16),
-        });
-      }
-
-      final generated = PasswordEntry.listFromJson(jsonEncode(data));
-      setState(() {
-        final merged = <String, PasswordEntry>{};
-        for (final e in _entries) {
-          merged[e.id] = e;
-        }
-        for (final e in generated) {
-          merged[e.id] = e;
-        }
-        _entries = merged.values.toList();
-      });
-      await _saveToDisk();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Generated 100 entries')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Generation error: $e')),
-      );
-    }
   }
 
   void _confirmDeleteAllEntries() {
@@ -456,16 +345,6 @@ class _HomePageState extends State<HomePage> {
             onPressed: _openSyncDialog,
           ),
           IconButton(
-            tooltip: 'Select log folder',
-            icon: const Icon(Icons.folder),
-            onPressed: _chooseLogFolder,
-          ),
-          IconButton(
-            tooltip: 'Generate 100 demo entries',
-            icon: const Icon(Icons.bolt),
-            onPressed: _generateHundredEntries,
-          ),
-          IconButton(
             tooltip: 'Delete ALL entries',
             icon: const Icon(Icons.delete_forever),
             onPressed: _confirmDeleteAllEntries,
@@ -484,32 +363,11 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       body: _filteredEntries.isEmpty
-          ? Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Center(child: Text("No entries found")),
-                const SizedBox(height: 12),
-                if (_logDir != null)
-                  Text('Log: $_logDir/${AppLogger.instance.logFileName}',
-                      style: Theme.of(context).textTheme.bodySmall),
-              ],
-            )
-          : Column(
-              children: [
-                if (_logDir != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6.0),
-                    child: Text('Log: $_logDir/${AppLogger.instance.logFileName}',
-                        style: Theme.of(context).textTheme.bodySmall),
-                  ),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: _filteredEntries.length,
-                    separatorBuilder: (_, __) => const Divider(),
-                    itemBuilder: (_, i) => _row(_filteredEntries[i]),
-                  ),
-                ),
-              ],
+          ? const Center(child: Text("No entries found"))
+          : ListView.separated(
+              itemCount: _filteredEntries.length,
+              separatorBuilder: (_, __) => const Divider(),
+              itemBuilder: (_, i) => _row(_filteredEntries[i]),
             ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _deleteDerivedKey,
