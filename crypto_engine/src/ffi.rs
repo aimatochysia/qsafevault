@@ -594,3 +594,140 @@ pub extern "C" fn pqcrypto_init_logging(level: c_int) -> c_int {
     
     STATUS_OK
 }
+
+/// Generate secure random bytes
+/// Uses the OS cryptographically secure random number generator
+#[no_mangle]
+pub extern "C" fn pqcrypto_generate_random_bytes(
+    length: usize,
+    bytes_out: *mut *mut u8,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if bytes_out.is_null() || length == 0 {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use rand_core::{OsRng, RngCore};
+        
+        let mut bytes = vec![0u8; length];
+        OsRng.fill_bytes(&mut bytes);
+        
+        // Allocate and copy
+        let bytes_ptr = unsafe {
+            let ptr = libc::malloc(length) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, length);
+            ptr
+        };
+        
+        unsafe {
+            *bytes_out = bytes_ptr;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Derive a key using HKDF-SHA3-256
+/// Used for key derivation from shared secrets
+#[no_mangle]
+pub extern "C" fn pqcrypto_derive_key_hkdf(
+    input_key_material: *const u8,
+    ikm_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    info: *const u8,
+    info_len: usize,
+    output_key_len: usize,
+    output_key_out: *mut *mut u8,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if input_key_material.is_null() || output_key_out.is_null() || output_key_len == 0 {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use hkdf::Hkdf;
+        use sha3::Sha3_256;
+        
+        let ikm = unsafe { slice::from_raw_parts(input_key_material, ikm_len) };
+        let salt_slice = if !salt.is_null() && salt_len > 0 {
+            Some(unsafe { slice::from_raw_parts(salt, salt_len) })
+        } else {
+            None
+        };
+        let info_slice = if !info.is_null() && info_len > 0 {
+            unsafe { slice::from_raw_parts(info, info_len) }
+        } else {
+            &[]
+        };
+        
+        let hk = Hkdf::<Sha3_256>::new(salt_slice, ikm);
+        let mut okm = vec![0u8; output_key_len];
+        hk.expand(info_slice, &mut okm)
+            .map_err(|_| "HKDF expansion failed")?;
+        
+        // Allocate and copy
+        let output_ptr = unsafe {
+            let ptr = libc::malloc(output_key_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(okm.as_ptr(), ptr, output_key_len);
+            ptr
+        };
+        
+        unsafe {
+            *output_key_out = output_ptr;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Get version information about the crypto engine
+#[no_mangle]
+pub extern "C" fn pqcrypto_get_version(
+    version_out: *mut *mut c_char,
+) -> c_int {
+    if version_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    let version = format!(
+        r#"{{"version":"{}","algorithms":{{"kem":"ML-KEM-768 (Kyber)","classical":"X25519","kdf":"HKDF-SHA3-256","cipher":"AES-256-GCM","hash":"SHA3-256"}},"fips_compatible":true,"post_quantum":true}}"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    
+    if let Ok(c_str) = CString::new(version) {
+        unsafe { *version_out = c_str.into_raw(); }
+        STATUS_OK
+    } else {
+        STATUS_ERROR
+    }
+}
