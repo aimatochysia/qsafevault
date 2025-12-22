@@ -480,19 +480,13 @@ class RustCryptoService {
     final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
 
     try {
-      // Copy input data
-      for (int i = 0; i < inputKeyMaterial.length; i++) {
-        ikmPtr[i] = inputKeyMaterial[i];
-      }
+      // Copy input data using efficient setAll
+      ikmPtr.asTypedList(inputKeyMaterial.length).setAll(0, inputKeyMaterial);
       if (salt != null) {
-        for (int i = 0; i < salt.length; i++) {
-          saltPtr[i] = salt[i];
-        }
+        saltPtr.asTypedList(salt.length).setAll(0, salt);
       }
       if (info != null) {
-        for (int i = 0; i < info.length; i++) {
-          infoPtr[i] = info[i];
-        }
+        infoPtr.asTypedList(info.length).setAll(0, info);
       }
 
       final deriveKey = _lib

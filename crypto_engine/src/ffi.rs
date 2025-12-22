@@ -609,6 +609,7 @@ pub extern "C" fn pqcrypto_generate_random_bytes(
 
     match std::panic::catch_unwind(|| {
         use rand_core::{OsRng, RngCore};
+        use zeroize::Zeroize;
         
         let mut bytes = vec![0u8; length];
         OsRng.fill_bytes(&mut bytes);
@@ -617,11 +618,15 @@ pub extern "C" fn pqcrypto_generate_random_bytes(
         let bytes_ptr = unsafe {
             let ptr = libc::malloc(length) as *mut u8;
             if ptr.is_null() {
+                bytes.zeroize(); // Clear sensitive data before returning error
                 return Err("Memory allocation failed".to_string());
             }
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, length);
             ptr
         };
+        
+        // Zeroize the local buffer after copying
+        bytes.zeroize();
         
         unsafe {
             *bytes_out = bytes_ptr;
@@ -663,6 +668,7 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
     match std::panic::catch_unwind(|| {
         use hkdf::Hkdf;
         use sha3::Sha3_256;
+        use zeroize::Zeroize;
         
         let ikm = unsafe { slice::from_raw_parts(input_key_material, ikm_len) };
         let salt_slice = if !salt.is_null() && salt_len > 0 {
@@ -685,11 +691,15 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
         let output_ptr = unsafe {
             let ptr = libc::malloc(output_key_len) as *mut u8;
             if ptr.is_null() {
+                okm.zeroize(); // Clear sensitive key material before returning error
                 return Err("Memory allocation failed".to_string());
             }
             std::ptr::copy_nonoverlapping(okm.as_ptr(), ptr, output_key_len);
             ptr
         };
+        
+        // Zeroize the output key material buffer after copying
+        okm.zeroize();
         
         unsafe {
             *output_key_out = output_ptr;

@@ -431,44 +431,88 @@ jobs:
           mkdir -p android/app/src/main/jniLibs/armeabi-v7a
           mkdir -p android/app/src/main/jniLibs/x86_64
           
-          # Copy Android libraries
-          cp ffi-libs/android-arm64-v8a/libcrypto_engine.so android/app/src/main/jniLibs/arm64-v8a/ || echo "arm64-v8a not found"
-          cp ffi-libs/android-armeabi-v7a/libcrypto_engine.so android/app/src/main/jniLibs/armeabi-v7a/ || echo "armeabi-v7a not found"
-          cp ffi-libs/android-x86_64/libcrypto_engine.so android/app/src/main/jniLibs/x86_64/ || echo "x86_64 not found"
+          # Copy Android libraries with explicit file existence checks
+          if [ -f "ffi-libs/android-arm64-v8a/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-arm64-v8a/libcrypto_engine.so android/app/src/main/jniLibs/arm64-v8a/
+            echo "✓ Copied arm64-v8a library"
+          else
+            echo "⚠ arm64-v8a library not found in artifacts"
+          fi
+          
+          if [ -f "ffi-libs/android-armeabi-v7a/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-armeabi-v7a/libcrypto_engine.so android/app/src/main/jniLibs/armeabi-v7a/
+            echo "✓ Copied armeabi-v7a library"
+          else
+            echo "⚠ armeabi-v7a library not found in artifacts"
+          fi
+          
+          if [ -f "ffi-libs/android-x86_64/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-x86_64/libcrypto_engine.so android/app/src/main/jniLibs/x86_64/
+            echo "✓ Copied x86_64 library"
+          else
+            echo "⚠ x86_64 library not found in artifacts"
+          fi
 
       - name: Copy Linux libraries
         run: |
           # Create Linux native library directory
           mkdir -p linux/libs
-          cp ffi-libs/linux-x86_64/libcrypto_engine.so linux/libs/ || echo "Linux library not found"
+          if [ -f "ffi-libs/linux-x86_64/libcrypto_engine.so" ]; then
+            cp ffi-libs/linux-x86_64/libcrypto_engine.so linux/libs/
+            echo "✓ Copied Linux library"
+          else
+            echo "⚠ Linux library not found in artifacts"
+          fi
 
       - name: Copy Windows libraries
         run: |
           # Create Windows native library directory
           mkdir -p windows/libs
-          cp ffi-libs/windows-x86_64/crypto_engine.dll windows/libs/ || echo "Windows library not found"
+          if [ -f "ffi-libs/windows-x86_64/crypto_engine.dll" ]; then
+            cp ffi-libs/windows-x86_64/crypto_engine.dll windows/libs/
+            echo "✓ Copied Windows library"
+          else
+            echo "⚠ Windows library not found in artifacts"
+          fi
 
       - name: Copy macOS libraries
         run: |
           # Create macOS native library directory
           mkdir -p macos/libs
-          cp ffi-libs/macos-universal/libcrypto_engine.dylib macos/libs/ || echo "macOS library not found"
+          if [ -f "ffi-libs/macos-universal/libcrypto_engine.dylib" ]; then
+            cp ffi-libs/macos-universal/libcrypto_engine.dylib macos/libs/
+            echo "✓ Copied macOS library"
+          else
+            echo "⚠ macOS library not found in artifacts"
+          fi
 
       - name: Copy iOS libraries
         run: |
           # Create iOS native library directory
           mkdir -p ios/libs
-          cp ffi-libs/ios-arm64/libcrypto_engine.a ios/libs/libcrypto_engine-device.a || echo "iOS device library not found"
-          cp ffi-libs/ios-simulator-universal/libcrypto_engine.a ios/libs/libcrypto_engine-simulator.a || echo "iOS simulator library not found"
+          if [ -f "ffi-libs/ios-arm64/libcrypto_engine.a" ]; then
+            cp ffi-libs/ios-arm64/libcrypto_engine.a ios/libs/libcrypto_engine-device.a
+            echo "✓ Copied iOS device library"
+          else
+            echo "⚠ iOS device library not found in artifacts"
+          fi
+          
+          if [ -f "ffi-libs/ios-simulator-universal/libcrypto_engine.a" ]; then
+            cp ffi-libs/ios-simulator-universal/libcrypto_engine.a ios/libs/libcrypto_engine-simulator.a
+            echo "✓ Copied iOS simulator library"
+          else
+            echo "⚠ iOS simulator library not found in artifacts"
+          fi
 
       - name: Copy Web WASM files
         run: |
           # Create web assets directory for WASM
           mkdir -p web/wasm
           if [ -d "ffi-libs/wasm" ]; then
-            cp -r ffi-libs/wasm/* web/wasm/ || echo "WASM files not found"
+            cp -r ffi-libs/wasm/* web/wasm/
+            echo "✓ Copied WASM files"
           else
-            echo "WASM build not available"
+            echo "⚠ WASM build not available (expected for some configurations)"
           fi
 
       - name: Configure Git
