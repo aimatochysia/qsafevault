@@ -4,9 +4,10 @@
 //! - AES-256-GCM authenticated encryption
 //! - Argon2id password-based key derivation
 //! - HKDF-SHA3-256 key derivation
-//! - HMAC-SHA256 message authentication
+//! - HMAC-SHA3-256 message authentication
 //! - X25519 key exchange
 //! - ML-KEM-768 (post-quantum) key encapsulation
+//! - Hybrid X25519 + ML-KEM quantum-resistant key exchange
 //! - Secure memory zeroization
 
 use std::ptr;
