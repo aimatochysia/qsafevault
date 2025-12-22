@@ -1,0 +1,14 @@
+C:\Assignments\Coding\qsafevault\crypto_engine\target\release\deps\serde-6eff7324139d2dc3.d: C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Assignments\Coding\qsafevault\crypto_engine\target\release\build\serde-a09402850eab3e9f\out/private.rs
+
+C:\Assignments\Coding\qsafevault\crypto_engine\target\release\deps\libserde-6eff7324139d2dc3.rlib: C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Assignments\Coding\qsafevault\crypto_engine\target\release\build\serde-a09402850eab3e9f\out/private.rs
+
+C:\Assignments\Coding\qsafevault\crypto_engine\target\release\deps\libserde-6eff7324139d2dc3.rmeta: C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Assignments\Coding\qsafevault\crypto_engine\target\release\build\serde-a09402850eab3e9f\out/private.rs
+
+C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\ASUS\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Assignments\Coding\qsafevault\crypto_engine\target\release\build\serde-a09402850eab3e9f\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Assignments\\Coding\\qsafevault\\crypto_engine\\target\\release\\build\\serde-a09402850eab3e9f\\out

@@ -68,3 +68,7 @@ qsafevault-release-key.jks
 **/windows/build/
 **/windows/.generated/
 .vscode/
+
+# Rust build artifacts
+crypto_engine/target/debug/
+crypto_engine/Cargo.lock
