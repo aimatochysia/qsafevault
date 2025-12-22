@@ -68,3 +68,7 @@ qsafevault-release-key.jks
 **/windows/build/
 **/windows/.generated/
 .vscode/
+
+# Rust build artifacts
+**/crypto_engine/target/
+**/crypto_engine/jniLibs/
