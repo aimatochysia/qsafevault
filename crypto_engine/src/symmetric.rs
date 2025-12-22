@@ -153,6 +153,46 @@ impl EncryptedData {
     }
 }
 
+/// Simple AES-GCM encryption for key wrapping (used by TPM/StrongBox implementations)
+/// Returns: (ciphertext_with_tag, nonce)
+pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes".to_string());
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    
+    // Generate random nonce
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    
+    // Encrypt (includes authentication tag)
+    let ciphertext_with_tag = cipher.encrypt(nonce, plaintext)
+        .map_err(|_| "Encryption failed")?;
+    
+    Ok((ciphertext_with_tag, nonce_bytes.to_vec()))
+}
+
+/// Simple AES-GCM decryption for key unwrapping (used by TPM/StrongBox implementations)
+pub fn aes_gcm_decrypt(key: &[u8], ciphertext_with_tag: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
+    if key.len() != 32 {
+        return Err("Key must be 32 bytes".to_string());
+    }
+    if nonce.len() != NONCE_SIZE {
+        return Err(format!("Nonce must be {} bytes", NONCE_SIZE));
+    }
+    
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(nonce);
+    
+    // Decrypt and verify authentication tag
+    let plaintext = cipher.decrypt(nonce, ciphertext_with_tag)
+        .map_err(|_| "Decryption failed: authentication error")?;
+    
+    Ok(plaintext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

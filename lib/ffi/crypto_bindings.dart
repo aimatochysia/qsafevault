@@ -5,12 +5,23 @@ import 'package:ffi/ffi.dart';
 /// Load the native crypto library based on platform
 ffi.DynamicLibrary loadCryptoLibrary() {
   if (Platform.isLinux) {
-    // Desktop Linux: Try release build first, fall back to debug
-    try {
-      return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.so');
-    } catch (_) {
-      return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.so');
+    // Desktop Linux: Try multiple locations
+    final paths = [
+      'linux/libs/libcrypto_engine.so',           // Pre-built from CI
+      'crypto_engine/target/release/libcrypto_engine.so',  // Local release build
+      'crypto_engine/target/debug/libcrypto_engine.so',    // Local debug build
+    ];
+    for (final path in paths) {
+      try {
+        return ffi.DynamicLibrary.open(path);
+      } catch (_) {
+        continue;
+      }
     }
+    throw UnsupportedError(
+      'Rust crypto library not found on Linux. '
+      'Please build the Rust library or run the CI workflow to generate binaries.'
+    );
   } else if (Platform.isAndroid) {
     // Android: Library must be bundled in android/app/src/main/jniLibs/<abi>/libcrypto_engine.so
     // Flutter will automatically find it when we just use the library name
@@ -25,12 +36,23 @@ ffi.DynamicLibrary loadCryptoLibrary() {
       );
     }
   } else if (Platform.isMacOS) {
-    // Desktop macOS: Try release build first, fall back to debug
-    try {
-      return ffi.DynamicLibrary.open('crypto_engine/target/release/libcrypto_engine.dylib');
-    } catch (_) {
-      return ffi.DynamicLibrary.open('crypto_engine/target/debug/libcrypto_engine.dylib');
+    // Desktop macOS: Try multiple locations
+    final paths = [
+      'macos/libs/libcrypto_engine.dylib',        // Pre-built from CI
+      'crypto_engine/target/release/libcrypto_engine.dylib',  // Local release build
+      'crypto_engine/target/debug/libcrypto_engine.dylib',    // Local debug build
+    ];
+    for (final path in paths) {
+      try {
+        return ffi.DynamicLibrary.open(path);
+      } catch (_) {
+        continue;
+      }
     }
+    throw UnsupportedError(
+      'Rust crypto library not found on macOS. '
+      'Please build the Rust library or run the CI workflow to generate binaries.'
+    );
   } else if (Platform.isIOS) {
     // iOS: Library must be embedded in the app bundle as a framework
     // Use DynamicLibrary.process() to access symbols from the app itself
@@ -44,12 +66,23 @@ ffi.DynamicLibrary loadCryptoLibrary() {
       );
     }
   } else if (Platform.isWindows) {
-    // Desktop Windows: Try release build first, fall back to debug
-    try {
-      return ffi.DynamicLibrary.open('crypto_engine/target/release/crypto_engine.dll');
-    } catch (_) {
-      return ffi.DynamicLibrary.open('crypto_engine/target/debug/crypto_engine.dll');
+    // Desktop Windows: Try multiple locations
+    final paths = [
+      'windows/libs/crypto_engine.dll',           // Pre-built from CI
+      'crypto_engine/target/release/crypto_engine.dll',  // Local release build
+      'crypto_engine/target/debug/crypto_engine.dll',    // Local debug build
+    ];
+    for (final path in paths) {
+      try {
+        return ffi.DynamicLibrary.open(path);
+      } catch (_) {
+        continue;
+      }
     }
+    throw UnsupportedError(
+      'Rust crypto library not found on Windows. '
+      'Please build the Rust library or run the CI workflow to generate binaries.'
+    );
   } else {
     throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
@@ -202,3 +235,49 @@ typedef DartGetBackendInfo = int Function(
 );
 
 typedef DartInitLogging = int Function(int level);
+
+/// Additional native function signatures for crypto primitives
+typedef NativeGenerateRandomBytes = ffi.Int32 Function(
+  ffi.Size length,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> bytesOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef NativeDeriveKeyHkdf = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> inputKeyMaterial,
+  ffi.Size ikmLen,
+  ffi.Pointer<ffi.Uint8> salt,
+  ffi.Size saltLen,
+  ffi.Pointer<ffi.Uint8> info,
+  ffi.Size infoLen,
+  ffi.Size outputKeyLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outputKeyOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef NativeGetVersion = ffi.Int32 Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> versionOut,
+);
+
+/// Dart function signatures for crypto primitives
+typedef DartGenerateRandomBytes = int Function(
+  int length,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> bytesOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef DartDeriveKeyHkdf = int Function(
+  ffi.Pointer<ffi.Uint8> inputKeyMaterial,
+  int ikmLen,
+  ffi.Pointer<ffi.Uint8> salt,
+  int saltLen,
+  ffi.Pointer<ffi.Uint8> info,
+  int infoLen,
+  int outputKeyLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outputKeyOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+typedef DartGetVersion = int Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> versionOut,
+);

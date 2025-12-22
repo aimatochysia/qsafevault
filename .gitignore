@@ -70,5 +70,7 @@ qsafevault-release-key.jks
 .vscode/
 
 # Rust build artifacts
-crypto_engine/target/debug/
-crypto_engine/Cargo.lock
+crypto_engine/target/
+
+# CodeQL artifacts
+_codeql_detected_source_root
