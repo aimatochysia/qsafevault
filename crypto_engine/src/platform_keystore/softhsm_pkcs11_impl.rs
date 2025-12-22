@@ -2,14 +2,13 @@
 // Provides PKCS#11-based key wrapping/unwrapping using SoftHSM tokens
 //
 // Uses the pkcs11 crate for PKCS#11 interface
+// Keys are stored securely within the HSM token and never extracted
 
 #![cfg(not(target_os = "android"))]
 
 use std::path::PathBuf;
 use std::sync::Once;
 use std::fs;
-use zeroize::Zeroize;
-use crate::symmetric::{aes_gcm_encrypt, aes_gcm_decrypt};
 use pkcs11::Ctx;
 use pkcs11::types::*;
 
@@ -37,12 +36,12 @@ fn get_softhsm_paths() -> Vec<PathBuf> {
     ]
 }
 
-/// Get storage directory for SoftHSM wrapped keys
+/// Get storage directory for SoftHSM encrypted data (not keys)
 fn get_softhsm_storage_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
         .ok_or_else(|| "Could not determine local data directory".to_string())?;
     
-    let dir = base.join("QSafeVault").join("softhsm_keys");
+    let dir = base.join("QSafeVault").join("softhsm_data");
     fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create SoftHSM storage directory: {}", e))?;
     
@@ -95,14 +94,15 @@ fn get_token_slot(ctx: &Ctx) -> Result<CK_SLOT_ID, String> {
         .ok_or_else(|| "No token slots available".to_string())
 }
 
-/// Wraps a master key using PKCS#11 SoftHSM
-/// Returns: (wrapped_key, nonce) or error
+/// Wraps a master key using PKCS#11 SoftHSM with hardware-protected encryption
+/// The wrapping key remains in the HSM and is never extracted
+/// Returns: (encrypted_data, iv) or error
 pub fn seal_with_softhsm(
     key_id: &str,
     master_key: &[u8],
     pin: Option<&str>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    log::info!("SoftHSM: Sealing key '{}'", key_id);
+    log::info!("SoftHSM: Sealing key '{}' using HSM-backed encryption", key_id);
     
     let ctx = init_pkcs11()?;
     let slot = get_token_slot(ctx)?;
@@ -120,70 +120,82 @@ pub fn seal_with_softhsm(
     
     log::info!("SoftHSM: Logged in");
     
-    // Generate random AES-256 wrapping key
-    use rand_core::RngCore;
-    let mut wrapping_key = vec![0u8; 32];
-    rand_core::OsRng.fill_bytes(&mut wrapping_key);
-    
-    // Create AES key object in token (stores the key securely in SoftHSM)
+    // Generate AES-256 key in the HSM token (non-extractable, sensitive)
     let key_label = format!("QSV_WK_{}", key_id);
+    let mechanism = CK_MECHANISM {
+        mechanism: CKM_AES_KEY_GEN,
+        pParameter: std::ptr::null_mut(),
+        ulParameterLen: 0,
+    };
+    
     let key_template = vec![
         CK_ATTRIBUTE::new(CKA_CLASS).with_ck_ulong(&CKO_SECRET_KEY),
         CK_ATTRIBUTE::new(CKA_KEY_TYPE).with_ck_ulong(&CKK_AES),
         CK_ATTRIBUTE::new(CKA_VALUE_LEN).with_ck_ulong(&32u64),
         CK_ATTRIBUTE::new(CKA_TOKEN).with_bool(&CK_TRUE),
-        CK_ATTRIBUTE::new(CKA_SENSITIVE).with_bool(&CK_FALSE), // Allow extraction for our AES-GCM
-        CK_ATTRIBUTE::new(CKA_EXTRACTABLE).with_bool(&CK_TRUE),
+        CK_ATTRIBUTE::new(CKA_PRIVATE).with_bool(&CK_TRUE),
+        CK_ATTRIBUTE::new(CKA_SENSITIVE).with_bool(&CK_TRUE),      // Key is sensitive
+        CK_ATTRIBUTE::new(CKA_EXTRACTABLE).with_bool(&CK_FALSE),   // Cannot be extracted
         CK_ATTRIBUTE::new(CKA_ENCRYPT).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_DECRYPT).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_LABEL).with_bytes(key_label.as_bytes()),
-        CK_ATTRIBUTE::new(CKA_VALUE).with_bytes(&wrapping_key),
     ];
     
-    let _wrapping_key_handle = ctx.create_object(session, &key_template)
-        .map_err(|e| format!("Failed to create wrapping key: {:?}", e))?;
+    let wrapping_key_handle = ctx.generate_key(session, &mechanism, &key_template)
+        .map_err(|e| format!("Failed to generate wrapping key in HSM: {:?}", e))?;
     
-    log::info!("SoftHSM: Wrapping key created in token");
+    log::info!("SoftHSM: Wrapping key generated in HSM token (non-extractable)");
     
-    // Encrypt master key with AES-GCM using our software implementation
-    let (wrapped_data, nonce) = aes_gcm_encrypt(&wrapping_key, master_key)?;
+    // Generate random IV for AES-CBC
+    use rand_core::RngCore;
+    let mut iv = [0u8; 16];
+    rand_core::OsRng.fill_bytes(&mut iv);
     
-    // Store wrapped data and nonce to filesystem (the wrapping key is in SoftHSM)
+    // Use AES-CBC encryption within the HSM
+    let encrypt_mechanism = CK_MECHANISM {
+        mechanism: CKM_AES_CBC_PAD,
+        pParameter: iv.as_ptr() as *mut _,
+        ulParameterLen: 16,
+    };
+    
+    // Initialize encryption
+    ctx.encrypt_init(session, &encrypt_mechanism, wrapping_key_handle)
+        .map_err(|e| format!("Failed to init encryption: {:?}", e))?;
+    
+    // Encrypt the master key
+    let encrypted_data = ctx.encrypt(session, master_key)
+        .map_err(|e| format!("Failed to encrypt: {:?}", e))?;
+    
+    log::info!("SoftHSM: Master key encrypted using HSM");
+    
+    // Store encrypted data and IV to filesystem (keys stay in HSM)
     let storage_dir = get_softhsm_storage_dir()?;
-    let data_path = storage_dir.join(format!("{}.dat", key_id));
-    let nonce_path = storage_dir.join(format!("{}.nonce", key_id));
+    let data_path = storage_dir.join(format!("{}.enc", key_id));
+    let iv_path = storage_dir.join(format!("{}.iv", key_id));
     
-    fs::write(&data_path, &wrapped_data)
-        .map_err(|e| format!("Failed to write wrapped data: {}", e))?;
-    fs::write(&nonce_path, &nonce)
-        .map_err(|e| format!("Failed to write nonce: {}", e))?;
-    
-    // Also store the wrapping key (encrypted) for later retrieval
-    // In a real HSM, you wouldn't do this - the key would stay in hardware
-    let key_path = storage_dir.join(format!("{}.key", key_id));
-    fs::write(&key_path, &wrapping_key)
-        .map_err(|e| format!("Failed to write key: {}", e))?;
-    
-    // Zeroize wrapping key in memory
-    wrapping_key.zeroize();
+    fs::write(&data_path, &encrypted_data)
+        .map_err(|e| format!("Failed to write encrypted data: {}", e))?;
+    fs::write(&iv_path, &iv)
+        .map_err(|e| format!("Failed to write IV: {}", e))?;
     
     // Logout and close session
     let _ = ctx.logout(session);
     let _ = ctx.close_session(session);
     
-    log::info!("SoftHSM: Key sealed successfully");
+    log::info!("SoftHSM: Key sealed successfully (key remains in HSM)");
     
-    Ok((wrapped_data, nonce))
+    Ok((encrypted_data, iv.to_vec()))
 }
 
 /// Unwraps a master key using PKCS#11 SoftHSM
+/// The wrapping key is accessed within the HSM, never extracted
 pub fn unseal_with_softhsm(
     key_id: &str,
     _wrapped_key: &[u8],
     _nonce: &[u8],
     pin: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    log::info!("SoftHSM: Unsealing key '{}'", key_id);
+    log::info!("SoftHSM: Unsealing key '{}' using HSM-backed decryption", key_id);
     
     let ctx = init_pkcs11()?;
     let slot = get_token_slot(ctx)?;
@@ -201,7 +213,7 @@ pub fn unseal_with_softhsm(
     
     log::info!("SoftHSM: Logged in");
     
-    // Find wrapping key by label to verify it exists in SoftHSM
+    // Find wrapping key by label in the HSM
     let key_label = format!("QSV_WK_{}", key_id);
     let find_template = vec![
         CK_ATTRIBUTE::new(CKA_CLASS).with_ck_ulong(&CKO_SECRET_KEY),
@@ -224,26 +236,36 @@ pub fn unseal_with_softhsm(
         return Err(format!("Wrapping key not found in SoftHSM for: {}", key_id));
     }
     
-    log::info!("SoftHSM: Wrapping key verified in token");
+    let wrapping_key_handle = objects[0];
     
-    // Load wrapped data and key from filesystem
+    log::info!("SoftHSM: Wrapping key found in HSM");
+    
+    // Load encrypted data and IV from filesystem
     let storage_dir = get_softhsm_storage_dir()?;
-    let data_path = storage_dir.join(format!("{}.dat", key_id));
-    let nonce_path = storage_dir.join(format!("{}.nonce", key_id));
-    let key_path = storage_dir.join(format!("{}.key", key_id));
+    let data_path = storage_dir.join(format!("{}.enc", key_id));
+    let iv_path = storage_dir.join(format!("{}.iv", key_id));
     
-    let wrapped_data = fs::read(&data_path)
-        .map_err(|e| format!("Failed to read wrapped data: {}", e))?;
-    let nonce = fs::read(&nonce_path)
-        .map_err(|e| format!("Failed to read nonce: {}", e))?;
-    let mut wrapping_key = fs::read(&key_path)
-        .map_err(|e| format!("Failed to read key: {}", e))?;
+    let encrypted_data = fs::read(&data_path)
+        .map_err(|e| format!("Failed to read encrypted data: {}", e))?;
+    let iv = fs::read(&iv_path)
+        .map_err(|e| format!("Failed to read IV: {}", e))?;
     
-    // Decrypt master key with AES-GCM
-    let master_key = aes_gcm_decrypt(&wrapping_key, &wrapped_data, &nonce)?;
+    // Use AES-CBC decryption within the HSM
+    let decrypt_mechanism = CK_MECHANISM {
+        mechanism: CKM_AES_CBC_PAD,
+        pParameter: iv.as_ptr() as *mut _,
+        ulParameterLen: iv.len() as u64,
+    };
     
-    // Zeroize wrapping key
-    wrapping_key.zeroize();
+    // Initialize decryption
+    ctx.decrypt_init(session, &decrypt_mechanism, wrapping_key_handle)
+        .map_err(|e| format!("Failed to init decryption: {:?}", e))?;
+    
+    // Decrypt the master key
+    let master_key = ctx.decrypt(session, &encrypted_data)
+        .map_err(|e| format!("Failed to decrypt: {:?}", e))?;
+    
+    log::info!("SoftHSM: Master key decrypted using HSM");
     
     // Logout and close session
     let _ = ctx.logout(session);
@@ -286,18 +308,17 @@ pub fn delete_from_softhsm(key_id: &str, pin: Option<&str>) -> Result<(), String
     ctx.find_objects_final(session)
         .map_err(|e| format!("Failed to finalize find: {:?}", e))?;
     
-    // Delete if found
+    // Delete key from HSM if found
     for obj in objects {
         ctx.destroy_object(session, obj)
             .map_err(|e| format!("Failed to destroy object: {:?}", e))?;
         log::info!("SoftHSM: Key object deleted from token");
     }
     
-    // Delete files from storage
+    // Delete encrypted data files from storage
     let storage_dir = get_softhsm_storage_dir()?;
-    let _ = fs::remove_file(storage_dir.join(format!("{}.dat", key_id)));
-    let _ = fs::remove_file(storage_dir.join(format!("{}.nonce", key_id)));
-    let _ = fs::remove_file(storage_dir.join(format!("{}.key", key_id)));
+    let _ = fs::remove_file(storage_dir.join(format!("{}.enc", key_id)));
+    let _ = fs::remove_file(storage_dir.join(format!("{}.iv", key_id)));
     
     // Logout and close session
     let _ = ctx.logout(session);
