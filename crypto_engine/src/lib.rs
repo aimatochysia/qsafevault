@@ -2,7 +2,9 @@
 //!
 //! This library provides cryptographic primitives for the QSafeVault password manager:
 //! - AES-256-GCM authenticated encryption
+//! - Argon2id password-based key derivation
 //! - HKDF-SHA3-256 key derivation
+//! - HMAC-SHA256 message authentication
 //! - X25519 key exchange
 //! - ML-KEM-768 (post-quantum) key encapsulation
 //! - Secure memory zeroization
@@ -12,13 +14,17 @@ use std::slice;
 
 use aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+use argon2::{Argon2, Algorithm, Params, Version};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac, digest::FixedOutput};
 use pqcrypto_mlkem::mlkem768;
 use pqcrypto_traits::kem::{Ciphertext, PublicKey, SecretKey, SharedSecret};
 use rand::RngCore;
 use sha3::Sha3_256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroize;
+
+type HmacSha3_256 = Hmac<Sha3_256>;
 
 // ============================================================================
 // Constants
@@ -44,6 +50,8 @@ pub const MLKEM_SECRET_KEY_SIZE: usize = 2400;
 pub const MLKEM_CIPHERTEXT_SIZE: usize = 1088;
 /// ML-KEM-768 shared secret size in bytes
 pub const MLKEM_SHARED_SECRET_SIZE: usize = 32;
+/// HMAC-SHA3-256 output size in bytes
+pub const HMAC_SHA3_256_SIZE: usize = 32;
 
 // ============================================================================
 // Error codes
@@ -294,6 +302,197 @@ pub unsafe extern "C" fn crypto_hkdf_sha3_derive(
     match hk.expand(info_slice, output_slice) {
         Ok(()) => CRYPTO_SUCCESS,
         Err(_) => CRYPTO_ERROR_KEY_DERIVATION_FAILED,
+    }
+}
+
+// ============================================================================
+// FFI Exports - Argon2id Password-Based Key Derivation
+// ============================================================================
+
+/// Derive a key from a password using Argon2id
+///
+/// This is the recommended algorithm for password hashing and key derivation.
+///
+/// # Safety
+/// - All pointers must be valid and point to allocated memory of the specified sizes
+/// - `output_key` must have space for `output_key_len` bytes (typically 32 for AES-256)
+/// - `memory_kib` should be at least 16384 (16 MiB) for security
+/// - `iterations` should be at least 1
+/// - `parallelism` should be at least 1
+#[no_mangle]
+pub unsafe extern "C" fn crypto_argon2id_derive(
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    memory_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+    output_key: *mut u8,
+    output_key_len: usize,
+) -> i32 {
+    // Validate pointers
+    if password.is_null() || salt.is_null() || output_key.is_null() {
+        return CRYPTO_ERROR_NULL_POINTER;
+    }
+
+    // Validate parameters
+    if salt_len < 8 {
+        return CRYPTO_ERROR_INVALID_LENGTH;
+    }
+    if output_key_len < 4 || output_key_len > 1024 {
+        return CRYPTO_ERROR_INVALID_LENGTH;
+    }
+
+    // Create slices
+    let password_slice = slice::from_raw_parts(password, password_len);
+    let salt_slice = slice::from_raw_parts(salt, salt_len);
+    let output_slice = slice::from_raw_parts_mut(output_key, output_key_len);
+
+    // Create Argon2 params
+    let params = match Params::new(memory_kib, iterations, parallelism, Some(output_key_len)) {
+        Ok(p) => p,
+        Err(_) => return CRYPTO_ERROR_KEY_DERIVATION_FAILED,
+    };
+
+    // Create Argon2id hasher
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    // Derive key
+    match argon2.hash_password_into(password_slice, salt_slice, output_slice) {
+        Ok(()) => CRYPTO_SUCCESS,
+        Err(_) => CRYPTO_ERROR_KEY_DERIVATION_FAILED,
+    }
+}
+
+// ============================================================================
+// FFI Exports - HMAC-SHA3-256
+// ============================================================================
+
+/// Compute HMAC-SHA3-256
+///
+/// # Safety
+/// - All pointers must be valid and point to allocated memory of the specified sizes
+/// - `output` must have space for at least 32 bytes (HMAC_SHA3_256_SIZE)
+#[no_mangle]
+pub unsafe extern "C" fn crypto_hmac_sha3_256(
+    key: *const u8,
+    key_len: usize,
+    message: *const u8,
+    message_len: usize,
+    output: *mut u8,
+    output_len: usize,
+) -> i32 {
+    // Validate pointers
+    if key.is_null() || message.is_null() || output.is_null() {
+        return CRYPTO_ERROR_NULL_POINTER;
+    }
+
+    // Validate output length
+    if output_len < HMAC_SHA3_256_SIZE {
+        return CRYPTO_ERROR_BUFFER_TOO_SMALL;
+    }
+
+    // Create slices
+    let key_slice = slice::from_raw_parts(key, key_len);
+    let message_slice = slice::from_raw_parts(message, message_len);
+    let output_slice = slice::from_raw_parts_mut(output, HMAC_SHA3_256_SIZE);
+
+    // Compute HMAC
+    let mut mac: HmacSha3_256 = match Mac::new_from_slice(key_slice) {
+        Ok(m) => m,
+        Err(_) => return CRYPTO_ERROR_KEY_DERIVATION_FAILED,
+    };
+
+    mac.update(message_slice);
+    let result = mac.finalize_fixed();
+    output_slice.copy_from_slice(&result);
+
+    CRYPTO_SUCCESS
+}
+
+/// Verify HMAC-SHA3-256
+///
+/// # Safety
+/// - All pointers must be valid and point to allocated memory of the specified sizes
+/// - `expected_mac` must point to exactly 32 bytes
+#[no_mangle]
+pub unsafe extern "C" fn crypto_hmac_sha3_256_verify(
+    key: *const u8,
+    key_len: usize,
+    message: *const u8,
+    message_len: usize,
+    expected_mac: *const u8,
+    expected_mac_len: usize,
+) -> i32 {
+    // Validate pointers
+    if key.is_null() || message.is_null() || expected_mac.is_null() {
+        return CRYPTO_ERROR_NULL_POINTER;
+    }
+
+    // Validate expected MAC length
+    if expected_mac_len != HMAC_SHA3_256_SIZE {
+        return CRYPTO_ERROR_INVALID_LENGTH;
+    }
+
+    // Create slices
+    let key_slice = slice::from_raw_parts(key, key_len);
+    let message_slice = slice::from_raw_parts(message, message_len);
+    let expected_slice = slice::from_raw_parts(expected_mac, expected_mac_len);
+
+    // Compute HMAC
+    let mut mac: HmacSha3_256 = match Mac::new_from_slice(key_slice) {
+        Ok(m) => m,
+        Err(_) => return CRYPTO_ERROR_KEY_DERIVATION_FAILED,
+    };
+
+    mac.update(message_slice);
+
+    // Verify in constant time
+    match mac.verify_slice(expected_slice) {
+        Ok(()) => CRYPTO_SUCCESS,
+        Err(_) => CRYPTO_ERROR_DECRYPTION_FAILED, // MAC verification failed
+    }
+}
+
+// ============================================================================
+// FFI Exports - Constant-Time Comparison
+// ============================================================================
+
+/// Compare two byte arrays in constant time
+///
+/// Returns CRYPTO_SUCCESS (0) if equal, CRYPTO_ERROR_DECRYPTION_FAILED (-4) if not equal.
+///
+/// # Safety
+/// - Both pointers must be valid and point to allocated memory of the specified sizes
+#[no_mangle]
+pub unsafe extern "C" fn crypto_constant_time_compare(
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+) -> i32 {
+    if a.is_null() || b.is_null() {
+        return CRYPTO_ERROR_NULL_POINTER;
+    }
+
+    if a_len != b_len {
+        return CRYPTO_ERROR_DECRYPTION_FAILED;
+    }
+
+    let a_slice = slice::from_raw_parts(a, a_len);
+    let b_slice = slice::from_raw_parts(b, b_len);
+
+    // Constant-time comparison
+    let mut diff = 0u8;
+    for i in 0..a_len {
+        diff |= a_slice[i] ^ b_slice[i];
+    }
+
+    if diff == 0 {
+        CRYPTO_SUCCESS
+    } else {
+        CRYPTO_ERROR_DECRYPTION_FAILED
     }
 }
 
@@ -745,6 +944,11 @@ pub extern "C" fn crypto_get_hybrid_shared_secret_size() -> usize {
     HYBRID_SHARED_SECRET_SIZE
 }
 
+#[no_mangle]
+pub extern "C" fn crypto_get_hmac_sha3_256_size() -> usize {
+    HMAC_SHA3_256_SIZE
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -980,6 +1184,125 @@ mod tests {
     }
 
     #[test]
+    fn test_argon2id_derive() {
+        let password = b"test_password_123";
+        let salt = b"random_salt_16bytes"; // At least 8 bytes required
+        let mut output = [0u8; 32];
+
+        unsafe {
+            let result = crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt.as_ptr(),
+                salt.len(),
+                16384,  // 16 MiB memory
+                1,      // 1 iteration
+                1,      // 1 parallelism
+                output.as_mut_ptr(),
+                output.len(),
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+        }
+
+        // Output should not be all zeros
+        assert_ne!(output, [0u8; 32]);
+
+        // Same parameters should produce same output (deterministic)
+        let mut output2 = [0u8; 32];
+        unsafe {
+            crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt.as_ptr(),
+                salt.len(),
+                16384,
+                1,
+                1,
+                output2.as_mut_ptr(),
+                output2.len(),
+            );
+        }
+        assert_eq!(output, output2);
+    }
+
+    #[test]
+    fn test_hmac_sha3_256() {
+        let key = b"secret_key";
+        let message = b"Hello, World!";
+        let mut mac = [0u8; HMAC_SHA3_256_SIZE];
+
+        unsafe {
+            let result = crypto_hmac_sha3_256(
+                key.as_ptr(),
+                key.len(),
+                message.as_ptr(),
+                message.len(),
+                mac.as_mut_ptr(),
+                mac.len(),
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+        }
+
+        // MAC should not be all zeros
+        assert_ne!(mac, [0u8; HMAC_SHA3_256_SIZE]);
+
+        // Verify should succeed
+        unsafe {
+            let result = crypto_hmac_sha3_256_verify(
+                key.as_ptr(),
+                key.len(),
+                message.as_ptr(),
+                message.len(),
+                mac.as_ptr(),
+                mac.len(),
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+        }
+
+        // Tampered MAC should fail verification
+        let mut tampered_mac = mac;
+        tampered_mac[0] ^= 0xFF;
+        unsafe {
+            let result = crypto_hmac_sha3_256_verify(
+                key.as_ptr(),
+                key.len(),
+                message.as_ptr(),
+                message.len(),
+                tampered_mac.as_ptr(),
+                tampered_mac.len(),
+            );
+            assert_eq!(result, CRYPTO_ERROR_DECRYPTION_FAILED);
+        }
+    }
+
+    #[test]
+    fn test_constant_time_compare() {
+        let a = [1u8, 2, 3, 4, 5];
+        let b = [1u8, 2, 3, 4, 5];
+        let c = [1u8, 2, 3, 4, 6];
+
+        unsafe {
+            // Equal arrays should return success
+            assert_eq!(
+                crypto_constant_time_compare(a.as_ptr(), a.len(), b.as_ptr(), b.len()),
+                CRYPTO_SUCCESS
+            );
+
+            // Different arrays should return failure
+            assert_eq!(
+                crypto_constant_time_compare(a.as_ptr(), a.len(), c.as_ptr(), c.len()),
+                CRYPTO_ERROR_DECRYPTION_FAILED
+            );
+
+            // Different lengths should return failure
+            assert_eq!(
+                crypto_constant_time_compare(a.as_ptr(), a.len(), c.as_ptr(), 3),
+                CRYPTO_ERROR_DECRYPTION_FAILED
+            );
+        }
+    }
+
+    #[test]
     fn test_constant_getters() {
         assert_eq!(crypto_get_aes_key_size(), 32);
         assert_eq!(crypto_get_aes_nonce_size(), 12);
@@ -991,5 +1314,6 @@ mod tests {
         assert_eq!(crypto_get_mlkem_secret_key_size(), 2400);
         assert_eq!(crypto_get_mlkem_ciphertext_size(), 1088);
         assert_eq!(crypto_get_mlkem_shared_secret_size(), 32);
+        assert_eq!(crypto_get_hmac_sha3_256_size(), 32);
     }
 }

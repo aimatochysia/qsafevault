@@ -18,6 +18,12 @@ aead = { version = "0.5", features = ["alloc"] }
 hkdf = "0.12"
 sha3 = "0.10"
 
+# Argon2 password hashing
+argon2 = "0.5"
+
+# HMAC for message authentication
+hmac = "0.12"
+
 # X25519 key exchange
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 
