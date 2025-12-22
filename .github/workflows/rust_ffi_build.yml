@@ -1,0 +1,386 @@
+name: Build Rust FFI Libraries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'crypto_engine/**'
+      - '.github/workflows/rust_ffi_build.yml'
+  pull_request:
+    paths:
+      - 'crypto_engine/**'
+      - '.github/workflows/rust_ffi_build.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: linux-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Build release
+        working-directory: crypto_engine
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Run tests
+        working-directory: crypto_engine
+        run: cargo test --release
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: crypto_engine/target/x86_64-unknown-linux-gnu/release/libcrypto_engine.so
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: windows-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Build release
+        working-directory: crypto_engine
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Run tests
+        working-directory: crypto_engine
+        run: cargo test --release
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: crypto_engine/target/x86_64-pc-windows-msvc/release/crypto_engine.dll
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (x86_64 + ARM64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: macos-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Build x86_64
+        working-directory: crypto_engine
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Build ARM64
+        working-directory: crypto_engine
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Create universal binary
+        working-directory: crypto_engine
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            target/x86_64-apple-darwin/release/libcrypto_engine.dylib \
+            target/aarch64-apple-darwin/release/libcrypto_engine.dylib \
+            -output target/universal-apple-darwin/release/libcrypto_engine.dylib
+
+      - name: Run tests
+        working-directory: crypto_engine
+        run: cargo test --release
+
+      - name: Upload macOS x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: crypto_engine/target/x86_64-apple-darwin/release/libcrypto_engine.dylib
+          if-no-files-found: error
+
+      - name: Upload macOS ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: crypto_engine/target/aarch64-apple-darwin/release/libcrypto_engine.dylib
+          if-no-files-found: error
+
+      - name: Upload macOS Universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: crypto_engine/target/universal-apple-darwin/release/libcrypto_engine.dylib
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android (arm64-v8a, armeabi-v7a, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: android-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: android-cargo-
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android targets
+        working-directory: crypto_engine
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ./jniLibs build --release
+
+      - name: Upload Android arm64-v8a artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-v8a
+          path: crypto_engine/jniLibs/arm64-v8a/libcrypto_engine.so
+          if-no-files-found: error
+
+      - name: Upload Android armeabi-v7a artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-armeabi-v7a
+          path: crypto_engine/jniLibs/armeabi-v7a/libcrypto_engine.so
+          if-no-files-found: error
+
+      - name: Upload Android x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-x86_64
+          path: crypto_engine/jniLibs/x86_64/libcrypto_engine.so
+          if-no-files-found: error
+
+  build-ios:
+    name: Build iOS (arm64 + simulator)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: ios-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: ios-cargo-
+
+      - name: Build iOS arm64 (device)
+        working-directory: crypto_engine
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: Build iOS arm64 (simulator)
+        working-directory: crypto_engine
+        run: cargo build --release --target aarch64-apple-ios-sim
+
+      - name: Build iOS x86_64 (simulator)
+        working-directory: crypto_engine
+        run: cargo build --release --target x86_64-apple-ios
+
+      - name: Create iOS simulator universal binary
+        working-directory: crypto_engine
+        run: |
+          mkdir -p target/ios-simulator-universal/release
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libcrypto_engine.a \
+            target/x86_64-apple-ios/release/libcrypto_engine.a \
+            -output target/ios-simulator-universal/release/libcrypto_engine.a
+
+      - name: Upload iOS device artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-arm64
+          path: crypto_engine/target/aarch64-apple-ios/release/libcrypto_engine.a
+          if-no-files-found: error
+
+      - name: Upload iOS simulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-universal
+          path: crypto_engine/target/ios-simulator-universal/release/libcrypto_engine.a
+          if-no-files-found: error
+
+  build-web:
+    name: Build Web (WASM)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crypto_engine/target
+          key: wasm-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
+          restore-keys: wasm-cargo-
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build WASM
+        working-directory: crypto_engine
+        run: wasm-pack build --target web --release
+        continue-on-error: true
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: wasm
+          path: crypto_engine/pkg/
+          if-no-files-found: warn
+
+  release:
+    name: Create Release with FFI Libraries
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-android, build-ios, build-web]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ffi-libs
+
+      - name: Display structure of downloaded files
+        run: ls -R ffi-libs
+
+      - name: Create release package
+        run: |
+          mkdir -p release
+          # Linux
+          cp ffi-libs/linux-x86_64/libcrypto_engine.so release/libcrypto_engine-linux-x86_64.so || true
+          # Windows
+          cp ffi-libs/windows-x86_64/crypto_engine.dll release/crypto_engine-windows-x86_64.dll || true
+          # macOS
+          cp ffi-libs/macos-universal/libcrypto_engine.dylib release/libcrypto_engine-macos-universal.dylib || true
+          # Android
+          mkdir -p release/android/arm64-v8a release/android/armeabi-v7a release/android/x86_64
+          cp ffi-libs/android-arm64-v8a/libcrypto_engine.so release/android/arm64-v8a/ || true
+          cp ffi-libs/android-armeabi-v7a/libcrypto_engine.so release/android/armeabi-v7a/ || true
+          cp ffi-libs/android-x86_64/libcrypto_engine.so release/android/x86_64/ || true
+          # iOS
+          mkdir -p release/ios
+          cp ffi-libs/ios-arm64/libcrypto_engine.a release/ios/libcrypto_engine-ios-arm64.a || true
+          cp ffi-libs/ios-simulator-universal/libcrypto_engine.a release/ios/libcrypto_engine-ios-sim.a || true
+          # WASM
+          if [ -d "ffi-libs/wasm" ]; then
+            cp -r ffi-libs/wasm release/
+          fi
+          # Create zip archives for easier distribution
+          cd release
+          zip -r android-libs.zip android/ || true
+          zip -r ios-libs.zip ios/ || true
+
+      - name: Generate release tag
+        id: tag
+        run: echo "tag=ffi-v$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Rust FFI Libraries ${{ steps.tag.outputs.tag }}
+          body: |
+            Automated build of Rust FFI cryptographic libraries for QSafeVault.
+            
+            ## Platforms
+            - **Linux x86_64**: `libcrypto_engine-linux-x86_64.so`
+            - **Windows x86_64**: `crypto_engine-windows-x86_64.dll`
+            - **macOS Universal** (x86_64 + ARM64): `libcrypto_engine-macos-universal.dylib`
+            - **Android**: `android-libs.zip` (arm64-v8a, armeabi-v7a, x86_64)
+            - **iOS**: `ios-libs.zip` (arm64 device, universal simulator)
+            - **Web**: WASM bundle (if available)
+            
+            ## Features
+            - AES-256-GCM authenticated encryption
+            - HKDF-SHA3-256 key derivation
+            - X25519 key exchange
+            - ML-KEM-768 (post-quantum) key encapsulation
+            - Hybrid X25519 + ML-KEM key exchange
+            - Secure memory zeroization
+          files: |
+            release/libcrypto_engine-linux-x86_64.so
+            release/crypto_engine-windows-x86_64.dll
+            release/libcrypto_engine-macos-universal.dylib
+            release/android-libs.zip
+            release/ios-libs.zip
+          token: ${{ secrets.GITHUB_TOKEN }}

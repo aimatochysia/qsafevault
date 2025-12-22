@@ -4,24 +4,43 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]   # <-- required for FFI on all platforms
+crate-type = ["cdylib", "staticlib"]  # cdylib for dynamic libs, staticlib for iOS
 
 [dependencies]
-# Add zeroization
-zeroize = "1"
+# Zeroization for secure memory handling
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
-# Add AES-GCM
+# AES-GCM authenticated encryption
 aes-gcm = "0.10"
-aead = "0.5"
+aead = { version = "0.5", features = ["alloc"] }
 
-# Add HKDF (SHA3 recommended)
+# HKDF key derivation with SHA3
 hkdf = "0.12"
 sha3 = "0.10"
 
-# Add X25519
-x25519-dalek = "2"
+# X25519 key exchange
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 
-# Add PQClean or liboqs wrappers (choose one)
-pqcrypto-mlkem = "0.8" # (Kyber ML-KEM from PQClean ecosystem)
+# Post-quantum ML-KEM (Kyber) key encapsulation
+pqcrypto-mlkem = "0.1"
+pqcrypto-traits = "0.3"
 
-# Optional: bindings for TPM, Secure Enclave, etc.
+# Random number generation
+rand = "0.8"
+getrandom = { version = "0.2", features = ["js"] }  # js feature for WASM support
+
+# Libc for FFI types
+libc = "0.2"
+
+[features]
+default = []
+wasm = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
