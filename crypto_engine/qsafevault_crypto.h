@@ -225,6 +225,71 @@ int32_t pqcrypto_get_backend_info(
  */
 int32_t pqcrypto_init_logging(int32_t level);
 
+/**
+ * Generate secure random bytes
+ * Uses the OS cryptographically secure random number generator
+ * 
+ * @param length Number of random bytes to generate
+ * @param bytes_out Output: pointer to random bytes (caller must free with pqcrypto_free_memory)
+ * @param error_msg_out Output: error message if failed (caller must free with pqcrypto_free_string)
+ * @return Status code
+ */
+int32_t pqcrypto_generate_random_bytes(
+    size_t length,
+    uint8_t **bytes_out,
+    char **error_msg_out
+);
+
+/**
+ * Derive a key using HKDF-SHA3-256
+ * Used for key derivation from shared secrets
+ * 
+ * @param input_key_material Input key material
+ * @param ikm_len Length of input key material
+ * @param salt Optional salt (can be NULL)
+ * @param salt_len Length of salt (0 if no salt)
+ * @param info Optional context/application-specific information (can be NULL)
+ * @param info_len Length of info (0 if no info)
+ * @param output_key_len Desired length of output key
+ * @param output_key_out Output: derived key (caller must free with pqcrypto_free_memory)
+ * @param error_msg_out Output: error message if failed (caller must free with pqcrypto_free_string)
+ * @return Status code
+ */
+int32_t pqcrypto_derive_key_hkdf(
+    const uint8_t *input_key_material,
+    size_t ikm_len,
+    const uint8_t *salt,
+    size_t salt_len,
+    const uint8_t *info,
+    size_t info_len,
+    size_t output_key_len,
+    uint8_t **output_key_out,
+    char **error_msg_out
+);
+
+/**
+ * Get version and algorithm information
+ * Returns a JSON string with version and supported algorithms
+ * 
+ * @param version_out Output: JSON string with version info (caller must free with pqcrypto_free_string)
+ * @return Status code
+ * 
+ * Example output:
+ * {
+ *   "version": "0.1.0",
+ *   "algorithms": {
+ *     "kem": "ML-KEM-768 (Kyber)",
+ *     "classical": "X25519",
+ *     "kdf": "HKDF-SHA3-256",
+ *     "cipher": "AES-256-GCM",
+ *     "hash": "SHA3-256"
+ *   },
+ *   "fips_compatible": true,
+ *   "post_quantum": true
+ * }
+ */
+int32_t pqcrypto_get_version(char **version_out);
+
 #ifdef __cplusplus
 }
 #endif

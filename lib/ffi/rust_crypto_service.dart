@@ -434,6 +434,126 @@ class RustCryptoService {
     _initLogging(level);
   }
 
+  /// Generate secure random bytes using Rust's OS CSPRNG
+  Uint8List generateRandomBytes(int length) {
+    final bytesPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final generateRandom = _lib
+          .lookup<ffi.NativeFunction<NativeGenerateRandomBytes>>('pqcrypto_generate_random_bytes')
+          .asFunction<DartGenerateRandomBytes>();
+
+      final status = generateRandom(length, bytesPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('Failed to generate random bytes: $error');
+      }
+
+      if (bytesPtr.value == ffi.nullptr) {
+        throw Exception('Failed to generate random bytes: null pointer');
+      }
+
+      final bytes = Uint8List.fromList(bytesPtr.value.asTypedList(length));
+      _freeMemory(bytesPtr.value);
+
+      return bytes;
+    } finally {
+      calloc.free(bytesPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Derive a key using HKDF-SHA3-256
+  Uint8List deriveKeyHkdf({
+    required Uint8List inputKeyMaterial,
+    Uint8List? salt,
+    Uint8List? info,
+    required int outputKeyLength,
+  }) {
+    final ikmPtr = calloc<ffi.Uint8>(inputKeyMaterial.length);
+    final saltPtr = salt != null ? calloc<ffi.Uint8>(salt.length) : ffi.nullptr.cast<ffi.Uint8>();
+    final infoPtr = info != null ? calloc<ffi.Uint8>(info.length) : ffi.nullptr.cast<ffi.Uint8>();
+    final outputPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      // Copy input data using efficient setAll
+      ikmPtr.asTypedList(inputKeyMaterial.length).setAll(0, inputKeyMaterial);
+      if (salt != null) {
+        saltPtr.asTypedList(salt.length).setAll(0, salt);
+      }
+      if (info != null) {
+        infoPtr.asTypedList(info.length).setAll(0, info);
+      }
+
+      final deriveKey = _lib
+          .lookup<ffi.NativeFunction<NativeDeriveKeyHkdf>>('pqcrypto_derive_key_hkdf')
+          .asFunction<DartDeriveKeyHkdf>();
+
+      final status = deriveKey(
+        ikmPtr,
+        inputKeyMaterial.length,
+        saltPtr,
+        salt?.length ?? 0,
+        infoPtr,
+        info?.length ?? 0,
+        outputKeyLength,
+        outputPtr,
+        errorPtr,
+      );
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('Failed to derive key: $error');
+      }
+
+      if (outputPtr.value == ffi.nullptr) {
+        throw Exception('Failed to derive key: null pointer');
+      }
+
+      final derivedKey = Uint8List.fromList(outputPtr.value.asTypedList(outputKeyLength));
+      _freeMemory(outputPtr.value);
+
+      return derivedKey;
+    } finally {
+      calloc.free(ikmPtr);
+      if (salt != null) calloc.free(saltPtr);
+      if (info != null) calloc.free(infoPtr);
+      calloc.free(outputPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Get version and algorithm information
+  String getVersion() {
+    final versionPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final getVersion = _lib
+          .lookup<ffi.NativeFunction<NativeGetVersion>>('pqcrypto_get_version')
+          .asFunction<DartGetVersion>();
+
+      final status = getVersion(versionPtr);
+
+      if (status != statusOk) {
+        throw Exception('Failed to get version');
+      }
+
+      if (versionPtr.value != ffi.nullptr) {
+        final version = versionPtr.value.cast<Utf8>().toDartString();
+        _freeString(versionPtr.value);
+        return version;
+      }
+      return '{}';
+    } finally {
+      calloc.free(versionPtr);
+    }
+  }
+
   String _getError(ffi.Pointer<ffi.Pointer<ffi.Char>> errorPtr) {
     if (errorPtr.value != ffi.nullptr) {
       final error = errorPtr.value.cast<Utf8>().toDartString();

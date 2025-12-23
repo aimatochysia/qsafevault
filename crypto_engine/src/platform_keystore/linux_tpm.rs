@@ -1,6 +1,9 @@
 // Platform keystore: Linux TPM2 support via tpm2-tss
 // Note: This requires system TPM2 libraries and tss-esapi crate
 
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+use super::linux_tpm_impl;
+
 /// Check if TPM2 is available on Linux
 #[cfg(target_os = "linux")]
 pub fn is_tpm_available() -> bool {
@@ -18,83 +21,13 @@ pub fn is_tpm_available() -> bool {
 pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {
     #[cfg(feature = "tpm")]
     {
-        // IMPLEMENTATION REQUIRED: Full tss-esapi integration
-        //
-        // Required dependency: tss-esapi = "7.4" (TPM2 Software Stack)
-        //
-        // Full implementation pseudo-code:
-        //
-        // use tss_esapi::{
-        //     Context, TctiNameConf,
-        //     structures::{
-        //         SensitiveData, Public, PublicBuilder,
-        //         SymmetricDefinition, SymmetricDefinitionObject,
-        //     },
-        //     interface_types::algorithm::{HashingAlgorithm, SymmetricMode},
-        //     handles::KeyHandle,
-        // };
-        //
-        // // 1. Create TPM context
-        // let tcti = TctiNameConf::from_environment_variable()
-        //     .or_else(|| TctiNameConf::Device(Default::default()))
-        //     .ok_or("No TCTI available")?;
-        // let mut context = Context::new(tcti)
-        //     .map_err(|e| format!("Failed to create TPM context: {}", e))?;
-        //
-        // // 2. Create Storage Root Key (SRK) or use existing
-        // let srk_handle = context.execute_with_nullauth_session(|ctx| {
-        //     ctx.create_primary(
-        //         Hierarchy::Owner,
-        //         &PublicBuilder::new()
-        //             .with_object_attributes(ObjectAttributes::RESTRICTED | 
-        //                                     ObjectAttributes::DECRYPT |
-        //                                     ObjectAttributes::FIXED_TPM |
-        //                                     ObjectAttributes::FIXED_PARENT)
-        //             .with_rsa_encryption_scheme(RsaScheme::Null)
-        //             .build()?
-        //         ,
-        //         None,
-        //         None,
-        //         None,
-        //         None,
-        //     )
-        // })?;
-        //
-        // // 3. Prepare sensitive data
-        // let sensitive = SensitiveData::try_from(key_data.to_vec())
-        //     .map_err(|e| format!("Failed to create sensitive data: {}", e))?;
-        //
-        // // 4. Create sealed object (encrypted blob bound to TPM)
-        // let sealed_object = context.execute_with_nullauth_session(|ctx| {
-        //     ctx.create(
-        //         srk_handle,
-        //         &PublicBuilder::new()
-        //             .with_object_attributes(ObjectAttributes::FIXED_TPM |
-        //                                     ObjectAttributes::FIXED_PARENT)
-        //             .with_auth_policy(Digest::default())
-        //             .build()?,
-        //         Some(&sensitive),
-        //         None,
-        //         None,
-        //         None,
-        //     )
-        // })?;
-        //
-        // // 5. Persist sealed blob to filesystem
-        // let (sealed_public, sealed_private) = sealed_object;
-        // save_tpm_sealed_data(key_id, &sealed_public, &sealed_private)?;
-        //
-        // // 6. Flush handles and cleanup
-        // context.flush_context(srk_handle.into())?;
-        //
-        // Ok(())
-        
-        log::warn!("Linux TPM2 sealing requested but tss-esapi integration not fully implemented");
-        log::info!("Falling back to software storage for key: {}", key_id);
-        Err(format!(
-            "Linux TPM2 sealing not implemented - using fallback for: {}",
-            key_id
-        ))
+        // Use the full tss-esapi implementation
+        log::info!("Linux TPM2: Using tss-esapi for sealing key '{}'", key_id);
+        let (wrapped_data, nonce) = linux_tpm_impl::seal_with_linux_tpm(key_id, key_data)?;
+        // Store nonce alongside the wrapped data for unsealing
+        store_seal_metadata(key_id, &nonce)?;
+        log::info!("Linux TPM2: Key sealed successfully");
+        Ok(())
     }
     
     #[cfg(not(feature = "tpm"))]
@@ -112,49 +45,21 @@ pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {
 pub fn unseal_private_key(key_id: &str) -> Result<Vec<u8>, String> {
     #[cfg(feature = "tpm")]
     {
-        // IMPLEMENTATION REQUIRED: Full tss-esapi integration
-        //
-        // Full implementation pseudo-code:
-        //
-        // use tss_esapi::{Context, TctiNameConf};
-        //
-        // // 1. Create TPM context
-        // let tcti = TctiNameConf::from_environment_variable()
-        //     .or_else(|| TctiNameConf::Device(Default::default()))
-        //     .ok_or("No TCTI available")?;
-        // let mut context = Context::new(tcti)
-        //     .map_err(|e| format!("Failed to create TPM context: {}", e))?;
-        //
-        // // 2. Recreate or load SRK
-        // let srk_handle = context.execute_with_nullauth_session(|ctx| {
-        //     ctx.create_primary(/* same params as seal */)
-        // })?;
-        //
-        // // 3. Load sealed blob from filesystem
-        // let (sealed_public, sealed_private) = load_tpm_sealed_data(key_id)?;
-        //
-        // // 4. Load sealed object into TPM
-        // let sealed_handle = context.execute_with_nullauth_session(|ctx| {
-        //     ctx.load(srk_handle, sealed_private, sealed_public)
-        // })?;
-        //
-        // // 5. Unseal (decrypt) the object
-        // let unsealed_data = context.execute_with_nullauth_session(|ctx| {
-        //     ctx.unseal(sealed_handle)
-        // })?;
-        //
-        // // 6. Cleanup
-        // context.flush_context(sealed_handle.into())?;
-        // context.flush_context(srk_handle.into())?;
-        //
-        // Ok(unsealed_data.value().to_vec())
+        // Use the full tss-esapi implementation
+        log::info!("Linux TPM2: Using tss-esapi for unsealing key '{}'", key_id);
         
-        log::warn!("Linux TPM2 unsealing requested but tss-esapi integration not fully implemented");
-        log::info!("Falling back to software storage for key: {}", key_id);
-        Err(format!(
-            "Linux TPM2 unsealing not implemented - using fallback for: {}",
-            key_id
-        ))
+        // Load nonce from metadata
+        let nonce = load_seal_metadata(key_id)?;
+        
+        // Load wrapped data from storage
+        let storage_dir = get_tpm_storage_dir()?;
+        let storage_path = storage_dir.join(format!("{}.tpm", key_id));
+        let wrapped_data = std::fs::read(&storage_path)
+            .map_err(|e| format!("Failed to read sealed data: {}", e))?;
+        
+        let key_data = linux_tpm_impl::unseal_with_linux_tpm(key_id, &wrapped_data, &nonce)?;
+        log::info!("Linux TPM2: Key unsealed successfully");
+        Ok(key_data)
     }
     
     #[cfg(not(feature = "tpm"))]
@@ -172,30 +77,11 @@ pub fn unseal_private_key(key_id: &str) -> Result<Vec<u8>, String> {
 pub fn delete_private_key(key_id: &str) -> Result<(), String> {
     #[cfg(feature = "tpm")]
     {
-        // IMPLEMENTATION REQUIRED: Full tss-esapi integration
-        //
-        // Full implementation pseudo-code:
-        //
-        // use tss_esapi::{Context, TctiNameConf};
-        //
-        // // 1. Create TPM context
-        // let tcti = TctiNameConf::from_environment_variable()
-        //     .or_else(|| TctiNameConf::Device(Default::default()))
-        //     .ok_or("No TCTI available")?;
-        // let mut context = Context::new(tcti)
-        //     .map_err(|e| format!("Failed to create TPM context: {}", e))?;
-        //
-        // // 2. If key is persisted in TPM, evict it
-        // // (typically sealed objects are just stored as blobs, not persisted handles)
-        //
-        // // 3. Delete sealed blob from filesystem
-        // delete_tpm_sealed_data(key_id)?;
-        //
-        // Ok(())
-        
-        log::debug!("Linux TPM2 deletion requested but tss-esapi integration not fully implemented");
-        log::info!("Key deletion skipped for: {}", key_id);
-        // Return Ok to allow graceful cleanup
+        // Use the full tss-esapi implementation
+        linux_tpm_impl::delete_from_linux_tpm(key_id)?;
+        // Also delete metadata
+        let _ = delete_seal_metadata(key_id);
+        log::info!("Linux TPM2: Key deleted successfully");
         Ok(())
     }
     
@@ -204,6 +90,46 @@ pub fn delete_private_key(key_id: &str) -> Result<(), String> {
         // No-op when TPM not compiled
         Ok(())
     }
+}
+
+// Helper functions for storing nonce/metadata
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+fn get_tpm_storage_dir() -> Result<std::path::PathBuf, String> {
+    let base = dirs::data_local_dir()
+        .ok_or_else(|| "Could not determine local data directory".to_string())?;
+    
+    let dir = base.join("QSafeVault").join("tpm_metadata");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create TPM metadata directory: {}", e))?;
+    
+    Ok(dir)
+}
+
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+fn store_seal_metadata(key_id: &str, nonce: &[u8]) -> Result<(), String> {
+    let dir = get_tpm_storage_dir()?;
+    let path = dir.join(format!("{}.nonce", key_id));
+    std::fs::write(&path, nonce)
+        .map_err(|e| format!("Failed to write nonce: {}", e))
+}
+
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+fn load_seal_metadata(key_id: &str) -> Result<Vec<u8>, String> {
+    let dir = get_tpm_storage_dir()?;
+    let path = dir.join(format!("{}.nonce", key_id));
+    std::fs::read(&path)
+        .map_err(|e| format!("Failed to read nonce: {}", e))
+}
+
+#[cfg(all(target_os = "linux", feature = "tpm"))]
+fn delete_seal_metadata(key_id: &str) -> Result<(), String> {
+    let dir = get_tpm_storage_dir()?;
+    let path = dir.join(format!("{}.nonce", key_id));
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete nonce: {}", e))?;
+    }
+    Ok(())
 }
 
 // Stub implementations for non-Linux platforms
@@ -221,35 +147,3 @@ pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
 pub fn delete_private_key(_key_id: &str) -> Result<(), String> {
     Err("Linux TPM not available on this platform".to_string())
 }
-
-// Note: Full Linux implementation would look like:
-// 
-// #[cfg(target_os = "linux")]
-// use tss_esapi::{
-//     Context, TctiNameConf,
-//     structures::{SensitiveData, Public, PublicBuilder},
-//     interface_types::algorithm::HashingAlgorithm,
-// };
-// 
-// #[cfg(target_os = "linux")]
-// pub fn seal_private_key_impl(key_id: &str, key_data: &[u8]) -> Result<(), String> {
-//     let tcti = TctiNameConf::from_environment_variable()
-//         .or_else(|| TctiNameConf::Device(Default::default()))
-//         .ok_or("No TCTI available")?;
-//     
-//     let mut context = Context::new(tcti)
-//         .map_err(|e| format!("Failed to create context: {}", e))?;
-//     
-//     // Create primary key
-//     let primary_handle = context.create_primary(
-//         /* parameters */
-//     ).map_err(|e| format!("Failed to create primary: {}", e))?;
-//     
-//     // Seal data
-//     let sensitive = SensitiveData::try_from(key_data.to_vec())
-//         .map_err(|e| format!("Failed to create sensitive data: {}", e))?;
-//     
-//     // ... rest of implementation
-//     
-//     Ok(())
-// }

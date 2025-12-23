@@ -9,15 +9,15 @@ use std::path::PathBuf;
 use windows::core::PCWSTR;
 use windows::Win32::Security::Cryptography::{
     NCryptOpenStorageProvider, NCryptCreatePersistedKey, NCryptSetProperty,
-    NCryptFinalizeKey, NCryptDeleteKey, NCryptOpenKey, NCryptExportKey,
-    NCryptEncrypt, NCryptDecrypt, NCryptFreeObject,
-    NCRYPT_PROV_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_MACHINE_KEY_FLAG,
-    NCRYPT_OVERWRITE_KEY_FLAG, MS_PLATFORM_CRYPTO_PROVIDER,
-    BCRYPT_RSA_ALGORITHM, NCRYPT_LENGTH_PROPERTY, NCRYPT_ALLOW_EXPORT_FLAG,
-    NCRYPT_EXPORT_POLICY_PROPERTY, BCRYPT_PAD_PKCS1,
+    NCryptFinalizeKey, NCryptDeleteKey, NCryptOpenKey, NCryptFreeObject,
+    NCryptEncrypt, NCryptDecrypt,
+    NCRYPT_PROV_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_HANDLE,
+    NCRYPT_MACHINE_KEY_FLAG, NCRYPT_OVERWRITE_KEY_FLAG, NCRYPT_SILENT_FLAG,
+    NCRYPT_PAD_PKCS1_FLAG, NCRYPT_FLAGS,
+    MS_PLATFORM_CRYPTO_PROVIDER, BCRYPT_RSA_ALGORITHM, NCRYPT_LENGTH_PROPERTY,
+    CERT_KEY_SPEC,
 };
-use windows::Win32::Foundation::{ERROR_SUCCESS, HRESULT};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 const TPM_WRAPPED_KEYS_DIR: &str = "tpm_wrapped_keys";
 
@@ -43,22 +43,17 @@ pub fn seal_with_windows_tpm(
     unsafe {
         // Open TPM storage provider
         let mut provider = NCRYPT_PROV_HANDLE::default();
-        let provider_name = encode_wide(MS_PLATFORM_CRYPTO_PROVIDER);
         
-        let result = NCryptOpenStorageProvider(
+        NCryptOpenStorageProvider(
             &mut provider,
-            PCWSTR(provider_name.as_ptr()),
+            MS_PLATFORM_CRYPTO_PROVIDER,
             0,
-        );
-        
-        if result.is_err() {
-            return Err(format!("Failed to open TPM provider: {:?}", result));
-        }
+        ).map_err(|e| format!("Failed to open TPM provider: {:?}", e))?;
         
         log::info!("Windows TPM2: Provider opened successfully");
         
         // Generate TPM-backed RSA key for wrapping
-        let tpm_key = create_tpm_key(&provider, key_id)?;
+        let tpm_key = create_tpm_key(provider, key_id)?;
         
         log::info!("Windows TPM2: TPM key created");
         
@@ -67,9 +62,9 @@ pub fn seal_with_windows_tpm(
         
         log::info!("Windows TPM2: Key wrapped successfully");
         
-        // Clean up
-        let _ = NCryptFreeObject(tpm_key.0 as isize);
-        let _ = NCryptFreeObject(provider.0 as isize);
+        // Clean up handles
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(tpm_key.0));
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(provider.0));
         
         // Store wrapped key to filesystem
         let storage_path = get_tpm_storage_dir()?.join(format!("{}.bin", key_id));
@@ -93,20 +88,15 @@ pub fn unseal_with_windows_tpm(
     unsafe {
         // Open TPM storage provider
         let mut provider = NCRYPT_PROV_HANDLE::default();
-        let provider_name = encode_wide(MS_PLATFORM_CRYPTO_PROVIDER);
         
-        let result = NCryptOpenStorageProvider(
+        NCryptOpenStorageProvider(
             &mut provider,
-            PCWSTR(provider_name.as_ptr()),
+            MS_PLATFORM_CRYPTO_PROVIDER,
             0,
-        );
-        
-        if result.is_err() {
-            return Err(format!("Failed to open TPM provider: {:?}", result));
-        }
+        ).map_err(|e| format!("Failed to open TPM provider: {:?}", e))?;
         
         // Open existing TPM key
-        let tpm_key = open_tpm_key(&provider, key_id)?;
+        let tpm_key = open_tpm_key(provider, key_id)?;
         
         log::info!("Windows TPM2: TPM key opened");
         
@@ -115,9 +105,9 @@ pub fn unseal_with_windows_tpm(
         
         log::info!("Windows TPM2: Key unwrapped successfully");
         
-        // Clean up
-        let _ = NCryptFreeObject(tpm_key.0 as isize);
-        let _ = NCryptFreeObject(provider.0 as isize);
+        // Clean up handles
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(tpm_key.0));
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(provider.0));
         
         Ok(master_key)
     }
@@ -130,21 +120,16 @@ pub fn delete_from_windows_tpm(key_id: &str) -> Result<(), String> {
     unsafe {
         // Open TPM storage provider
         let mut provider = NCRYPT_PROV_HANDLE::default();
-        let provider_name = encode_wide(MS_PLATFORM_CRYPTO_PROVIDER);
         
-        let result = NCryptOpenStorageProvider(
+        NCryptOpenStorageProvider(
             &mut provider,
-            PCWSTR(provider_name.as_ptr()),
+            MS_PLATFORM_CRYPTO_PROVIDER,
             0,
-        );
-        
-        if result.is_err() {
-            return Err(format!("Failed to open TPM provider: {:?}", result));
-        }
+        ).map_err(|e| format!("Failed to open TPM provider: {:?}", e))?;
         
         // Open and delete the key
-        if let Ok(tpm_key) = open_tpm_key(&provider, key_id) {
-            let _ = NCryptDeleteKey(tpm_key, 0);
+        if let Ok(tpm_key) = open_tpm_key(provider, key_id) {
+            let _ = NCryptDeleteKey(tpm_key, NCRYPT_FLAGS(0));
             log::info!("Windows TPM2: TPM key deleted");
         }
         
@@ -156,7 +141,7 @@ pub fn delete_from_windows_tpm(key_id: &str) -> Result<(), String> {
             log::info!("Windows TPM2: Wrapped key file deleted");
         }
         
-        let _ = NCryptFreeObject(provider.0 as isize);
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(provider.0));
         
         Ok(())
     }
@@ -165,83 +150,62 @@ pub fn delete_from_windows_tpm(key_id: &str) -> Result<(), String> {
 // Helper functions
 
 unsafe fn create_tpm_key(
-    provider: &NCRYPT_PROV_HANDLE,
+    provider: NCRYPT_PROV_HANDLE,
     key_id: &str,
 ) -> Result<NCRYPT_KEY_HANDLE, String> {
     let mut key_handle = NCRYPT_KEY_HANDLE::default();
-    let key_name = encode_wide(&format!("QSafeVault_{}", key_id));
-    let algorithm = encode_wide(BCRYPT_RSA_ALGORITHM);
+    let key_name: Vec<u16> = format!("QSafeVault_{}\0", key_id).encode_utf16().collect();
     
-    // Create persisted key
-    let result = NCryptCreatePersistedKey(
-        *provider,
+    // Create persisted RSA key in TPM
+    NCryptCreatePersistedKey(
+        provider,
         &mut key_handle,
-        PCWSTR(algorithm.as_ptr()),
+        BCRYPT_RSA_ALGORITHM,
         PCWSTR(key_name.as_ptr()),
-        0,
+        CERT_KEY_SPEC(0), // AT_KEYEXCHANGE not needed for NCrypt
         NCRYPT_OVERWRITE_KEY_FLAG | NCRYPT_MACHINE_KEY_FLAG,
-    );
-    
-    if result.is_err() {
-        return Err(format!("Failed to create persisted key: {:?}", result));
-    }
+    ).map_err(|e| format!("Failed to create persisted key: {:?}", e))?;
     
     // Set key length to 2048 bits
     let key_length: u32 = 2048;
-    let length_property = encode_wide(NCRYPT_LENGTH_PROPERTY);
-    let result = NCryptSetProperty(
-        key_handle,
-        PCWSTR(length_property.as_ptr()),
-        &key_length as *const u32 as *const u8,
-        4,
-        0,
-    );
+    let key_length_bytes = key_length.to_le_bytes();
     
-    if result.is_err() {
-        let _ = NCryptFreeObject(key_handle.0 as isize);
-        return Err(format!("Failed to set key length: {:?}", result));
-    }
-    
-    // Allow export for wrapping operations
-    let export_policy: u32 = NCRYPT_ALLOW_EXPORT_FLAG.0;
-    let export_property = encode_wide(NCRYPT_EXPORT_POLICY_PROPERTY);
-    let _ = NCryptSetProperty(
-        key_handle,
-        PCWSTR(export_property.as_ptr()),
-        &export_policy as *const u32 as *const u8,
-        4,
-        0,
-    );
+    NCryptSetProperty(
+        NCRYPT_HANDLE(key_handle.0),
+        NCRYPT_LENGTH_PROPERTY,
+        &key_length_bytes,
+        NCRYPT_FLAGS(0),
+    ).map_err(|e| {
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(key_handle.0));
+        format!("Failed to set key length: {:?}", e)
+    })?;
     
     // Finalize key creation
-    let result = NCryptFinalizeKey(key_handle, 0);
-    
-    if result.is_err() {
-        let _ = NCryptFreeObject(key_handle.0 as isize);
-        return Err(format!("Failed to finalize key: {:?}", result));
-    }
+    NCryptFinalizeKey(
+        key_handle,
+        NCRYPT_SILENT_FLAG,
+    ).map_err(|e| {
+        let _ = NCryptFreeObject(NCRYPT_HANDLE(key_handle.0));
+        format!("Failed to finalize key: {:?}", e)
+    })?;
     
     Ok(key_handle)
 }
 
 unsafe fn open_tpm_key(
-    provider: &NCRYPT_PROV_HANDLE,
+    provider: NCRYPT_PROV_HANDLE,
     key_id: &str,
 ) -> Result<NCRYPT_KEY_HANDLE, String> {
     let mut key_handle = NCRYPT_KEY_HANDLE::default();
-    let key_name = encode_wide(&format!("QSafeVault_{}", key_id));
+    let key_name: Vec<u16> = format!("QSafeVault_{}\0", key_id).encode_utf16().collect();
     
-    let result = NCryptOpenKey(
-        *provider,
+    NCryptOpenKey(
+        provider,
         &mut key_handle,
         PCWSTR(key_name.as_ptr()),
-        0,
-        0,
-    );
-    
-    if result.is_err() {
-        return Err(format!("Failed to open TPM key: {:?}", result));
-    }
+        CERT_KEY_SPEC(0),
+        NCRYPT_FLAGS(0),
+    ).map_err(|e| format!("Failed to open TPM key: {:?}", e))?;
     
     Ok(key_handle)
 }
@@ -255,40 +219,35 @@ unsafe fn wrap_with_tpm_key(
     let mut wrapping_key = vec![0u8; 32];
     rand_core::OsRng.fill_bytes(&mut wrapping_key);
     
-    // Encrypt the AES key with TPM RSA key
+    // First call to get required output size
     let mut encrypted_aes_key_len: u32 = 0;
-    let result = NCryptEncrypt(
+    NCryptEncrypt(
         tpm_key,
-        wrapping_key.as_ptr(),
-        wrapping_key.len() as u32,
+        Some(&wrapping_key),
         None,
-        std::ptr::null_mut(),
-        0,
+        None,
         &mut encrypted_aes_key_len,
-        BCRYPT_PAD_PKCS1,
-    );
-    
-    if result.is_err() {
+        NCRYPT_PAD_PKCS1_FLAG,
+    ).map_err(|e| {
         wrapping_key.zeroize();
-        return Err(format!("Failed to get encrypted key length: {:?}", result));
-    }
+        format!("Failed to get encrypted key length: {:?}", e)
+    })?;
     
+    // Allocate output buffer and encrypt
     let mut encrypted_aes_key = vec![0u8; encrypted_aes_key_len as usize];
-    let result = NCryptEncrypt(
+    NCryptEncrypt(
         tpm_key,
-        wrapping_key.as_ptr(),
-        wrapping_key.len() as u32,
+        Some(&wrapping_key),
         None,
-        encrypted_aes_key.as_mut_ptr(),
-        encrypted_aes_key.len() as u32,
+        Some(&mut encrypted_aes_key),
         &mut encrypted_aes_key_len,
-        BCRYPT_PAD_PKCS1,
-    );
-    
-    if result.is_err() {
+        NCRYPT_PAD_PKCS1_FLAG,
+    ).map_err(|e| {
         wrapping_key.zeroize();
-        return Err(format!("Failed to encrypt AES key: {:?}", result));
-    }
+        format!("Failed to encrypt AES key: {:?}", e)
+    })?;
+    
+    encrypted_aes_key.truncate(encrypted_aes_key_len as usize);
     
     // Wrap master key with AES-GCM
     let (wrapped_master, nonce) = aes_gcm_encrypt(&wrapping_key, master_key)
@@ -330,50 +289,39 @@ unsafe fn unwrap_with_tpm_key(
     let encrypted_aes_key = &wrapped_data[4..4 + encrypted_aes_key_len];
     let wrapped_master = &wrapped_data[4 + encrypted_aes_key_len..];
     
-    // Decrypt AES key with TPM RSA key
+    // First call to get required output size
     let mut wrapping_key_len: u32 = 0;
-    let result = NCryptDecrypt(
+    NCryptDecrypt(
         tpm_key,
-        encrypted_aes_key.as_ptr(),
-        encrypted_aes_key.len() as u32,
+        Some(encrypted_aes_key),
         None,
-        std::ptr::null_mut(),
-        0,
+        None,
         &mut wrapping_key_len,
-        BCRYPT_PAD_PKCS1,
-    );
+        NCRYPT_PAD_PKCS1_FLAG,
+    ).map_err(|e| format!("Failed to get decrypted key length: {:?}", e))?;
     
-    if result.is_err() {
-        return Err(format!("Failed to get decrypted key length: {:?}", result));
-    }
-    
+    // Allocate output buffer and decrypt
     let mut wrapping_key = vec![0u8; wrapping_key_len as usize];
-    let result = NCryptDecrypt(
+    NCryptDecrypt(
         tpm_key,
-        encrypted_aes_key.as_ptr(),
-        encrypted_aes_key.len() as u32,
+        Some(encrypted_aes_key),
         None,
-        wrapping_key.as_mut_ptr(),
-        wrapping_key.len() as u32,
+        Some(&mut wrapping_key),
         &mut wrapping_key_len,
-        BCRYPT_PAD_PKCS1,
-    );
-    
-    if result.is_err() {
+        NCRYPT_PAD_PKCS1_FLAG,
+    ).map_err(|e| {
         wrapping_key.zeroize();
-        return Err(format!("Failed to decrypt AES key: {:?}", result));
-    }
+        format!("Failed to decrypt AES key: {:?}", e)
+    })?;
+    
+    wrapping_key.truncate(wrapping_key_len as usize);
     
     // Unwrap master key with AES-GCM
-    let master_key = aes_gcm_decrypt(&wrapping_key[..32], wrapped_master, nonce)
+    let master_key = aes_gcm_decrypt(&wrapping_key, wrapped_master, nonce)
         .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
     
     // Zeroize sensitive data
     wrapping_key.zeroize();
     
     Ok(master_key)
-}
-
-fn encode_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
