@@ -3,6 +3,11 @@ name: Build Rust FFI Libraries
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Branch to run the workflow on'
+        required: true
+        default: 'main'
+        
       commit_binaries:
         description: 'Commit FFI binaries to repository'
         required: false
@@ -549,3 +554,4 @@ jobs:
             
             git push
           fi
+
