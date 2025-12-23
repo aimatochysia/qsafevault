@@ -9,7 +9,7 @@
 
 use crate::symmetric::{aes_gcm_encrypt, aes_gcm_decrypt};
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject, JString, JValue, GlobalRef};
+use jni::objects::{JByteArray, JClass, JObject, JString, JValue, GlobalRef};
 use jni::sys::jbyteArray;
 use std::sync::Mutex;
 use zeroize::Zeroize;
@@ -81,7 +81,7 @@ fn check_strongbox_support_internal(env: &mut JNIEnv) -> Result<bool, String> {
         &pm,
         "hasSystemFeature",
         "(Ljava/lang/String;)Z",
-        &[JValue::Object(&feature.into())],
+        &[JValue::Object(&JObject::from(feature))],
     ).map_err(|e| format!("Failed to check feature: {:?}", e))?
         .z().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -159,7 +159,7 @@ fn generate_strongbox_key_if_needed(env: &mut JNIEnv, key_alias: &str) -> Result
         keystore_class,
         "getInstance",
         "(Ljava/lang/String;)Ljava/security/KeyStore;",
-        &[JValue::Object(&provider_str.into())],
+        &[JValue::Object(&JObject::from(provider_str))],
     ).map_err(|e| format!("Failed to get KeyStore: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -175,7 +175,7 @@ fn generate_strongbox_key_if_needed(env: &mut JNIEnv, key_alias: &str) -> Result
         &keystore,
         "containsAlias",
         "(Ljava/lang/String;)Z",
-        &[JValue::Object(&key_alias_str.into())],
+        &[JValue::Object(&JObject::from(key_alias_str))],
     ).map_err(|e| format!("Failed to check alias: {:?}", e))?
         .z().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -191,11 +191,15 @@ fn generate_strongbox_key_if_needed(env: &mut JNIEnv, key_alias: &str) -> Result
     let aes_str = env.new_string("AES")
         .map_err(|e| format!("Failed to create string: {:?}", e))?;
     
+    // Create a new provider string for KeyGenerator (previous one was consumed)
+    let provider_str2 = env.new_string("AndroidKeyStore")
+        .map_err(|e| format!("Failed to create string: {:?}", e))?;
+    
     let key_gen = env.call_static_method(
         key_gen_class,
         "getInstance",
         "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;",
-        &[JValue::Object(&aes_str.into()), JValue::Object(&provider_str.into())],
+        &[JValue::Object(&JObject::from(aes_str)), JValue::Object(&JObject::from(provider_str2))],
     ).map_err(|e| format!("Failed to get KeyGenerator: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -229,7 +233,7 @@ fn build_key_gen_parameter_spec<'local>(
     let builder = env.new_object(
         builder_class,
         "(Ljava/lang/String;I)V",
-        &[JValue::Object(&key_alias_str.into()), JValue::Int(purposes)],
+        &[JValue::Object(&JObject::from(key_alias_str)), JValue::Int(purposes)],
     ).map_err(|e| format!("Failed to create Builder: {:?}", e))?;
     
     // Set block modes
@@ -237,28 +241,28 @@ fn build_key_gen_parameter_spec<'local>(
         .map_err(|e| format!("Failed to create string: {:?}", e))?;
     let string_class = env.find_class("java/lang/String")
         .map_err(|e| format!("Failed to find String class: {:?}", e))?;
-    let block_modes = env.new_object_array(1, string_class, &gcm_str)
+    let block_modes = env.new_object_array(1, &string_class, &gcm_str)
         .map_err(|e| format!("Failed to create array: {:?}", e))?;
     
     let builder = env.call_method(
         &builder,
         "setBlockModes",
         "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;",
-        &[JValue::Object(&block_modes.into())],
+        &[JValue::Object(&JObject::from(block_modes))],
     ).map_err(|e| format!("Failed to set block modes: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
     // Set encryption paddings
     let no_padding_str = env.new_string("NoPadding")
         .map_err(|e| format!("Failed to create string: {:?}", e))?;
-    let paddings = env.new_object_array(1, string_class, &no_padding_str)
+    let paddings = env.new_object_array(1, &string_class, &no_padding_str)
         .map_err(|e| format!("Failed to create array: {:?}", e))?;
     
     let builder = env.call_method(
         &builder,
         "setEncryptionPaddings",
         "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;",
-        &[JValue::Object(&paddings.into())],
+        &[JValue::Object(&JObject::from(paddings))],
     ).map_err(|e| format!("Failed to set paddings: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -311,7 +315,7 @@ fn encrypt_with_strongbox(
         cipher_class,
         "getInstance",
         "(Ljava/lang/String;)Ljavax/crypto/Cipher;",
-        &[JValue::Object(&transformation.into())],
+        &[JValue::Object(&JObject::from(transformation))],
     ).map_err(|e| format!("Failed to get Cipher: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -324,27 +328,29 @@ fn encrypt_with_strongbox(
     ).map_err(|e| format!("Failed to init cipher: {:?}", e))?;
     
     // Get IV
-    let iv = env.call_method(&cipher, "getIV", "()[B", &[])
+    let iv_obj = env.call_method(&cipher, "getIV", "()[B", &[])
         .map_err(|e| format!("Failed to get IV: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
+    let iv: JByteArray = JByteArray::from(iv_obj);
     
     // Convert plaintext to Java byte array
     let plaintext_arr = env.byte_array_from_slice(plaintext)
         .map_err(|e| format!("Failed to create byte array: {:?}", e))?;
     
     // Encrypt
-    let ciphertext = env.call_method(
+    let ciphertext_obj = env.call_method(
         &cipher,
         "doFinal",
         "([B)[B",
-        &[JValue::Object(&plaintext_arr.into())],
+        &[JValue::Object(&JObject::from(plaintext_arr))],
     ).map_err(|e| format!("Failed to encrypt: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
+    let ciphertext: JByteArray = JByteArray::from(ciphertext_obj);
     
     // Convert results to Rust
-    let iv_bytes = env.convert_byte_array(iv.as_raw().cast())
+    let iv_bytes = env.convert_byte_array(&iv)
         .map_err(|e| format!("Failed to convert IV: {:?}", e))?;
-    let ciphertext_bytes = env.convert_byte_array(ciphertext.as_raw().cast())
+    let ciphertext_bytes = env.convert_byte_array(&ciphertext)
         .map_err(|e| format!("Failed to convert ciphertext: {:?}", e))?;
     
     // Combine IV + ciphertext
@@ -388,7 +394,7 @@ fn decrypt_with_strongbox(
         cipher_class,
         "getInstance",
         "(Ljava/lang/String;)Ljavax/crypto/Cipher;",
-        &[JValue::Object(&transformation.into())],
+        &[JValue::Object(&JObject::from(transformation))],
     ).map_err(|e| format!("Failed to get Cipher: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -402,7 +408,7 @@ fn decrypt_with_strongbox(
     let gcm_spec = env.new_object(
         gcm_spec_class,
         "(I[B)V",
-        &[JValue::Int(128), JValue::Object(&iv_arr.into())],
+        &[JValue::Int(128), JValue::Object(&JObject::from(iv_arr))],
     ).map_err(|e| format!("Failed to create GCMParameterSpec: {:?}", e))?;
     
     // Initialize for decryption (mode 2 = DECRYPT_MODE)
@@ -418,16 +424,17 @@ fn decrypt_with_strongbox(
         .map_err(|e| format!("Failed to create byte array: {:?}", e))?;
     
     // Decrypt
-    let plaintext = env.call_method(
+    let plaintext_obj = env.call_method(
         &cipher,
         "doFinal",
         "([B)[B",
-        &[JValue::Object(&ciphertext_arr.into())],
+        &[JValue::Object(&JObject::from(ciphertext_arr))],
     ).map_err(|e| format!("Failed to decrypt: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
+    let plaintext: JByteArray = JByteArray::from(plaintext_obj);
     
     // Convert to Rust
-    let plaintext_bytes = env.convert_byte_array(plaintext.as_raw().cast())
+    let plaintext_bytes = env.convert_byte_array(&plaintext)
         .map_err(|e| format!("Failed to convert plaintext: {:?}", e))?;
     
     Ok(plaintext_bytes)
@@ -447,7 +454,7 @@ fn get_key_from_keystore<'local>(
         keystore_class,
         "getInstance",
         "(Ljava/lang/String;)Ljava/security/KeyStore;",
-        &[JValue::Object(&provider_str.into())],
+        &[JValue::Object(&JObject::from(provider_str))],
     ).map_err(|e| format!("Failed to get KeyStore: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -461,7 +468,7 @@ fn get_key_from_keystore<'local>(
         &keystore,
         "getKey",
         "(Ljava/lang/String;[C)Ljava/security/Key;",
-        &[JValue::Object(&key_alias_str.into()), JValue::Object(&JObject::null())],
+        &[JValue::Object(&JObject::from(key_alias_str)), JValue::Object(&JObject::null())],
     ).map_err(|e| format!("Failed to get key: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -479,7 +486,7 @@ fn delete_strongbox_key(env: &mut JNIEnv, key_alias: &str) -> Result<(), String>
         keystore_class,
         "getInstance",
         "(Ljava/lang/String;)Ljava/security/KeyStore;",
-        &[JValue::Object(&provider_str.into())],
+        &[JValue::Object(&JObject::from(provider_str))],
     ).map_err(|e| format!("Failed to get KeyStore: {:?}", e))?
         .l().map_err(|e| format!("Failed to convert: {:?}", e))?;
     
@@ -493,7 +500,7 @@ fn delete_strongbox_key(env: &mut JNIEnv, key_alias: &str) -> Result<(), String>
         &keystore,
         "deleteEntry",
         "(Ljava/lang/String;)V",
-        &[JValue::Object(&key_alias_str.into())],
+        &[JValue::Object(&JObject::from(key_alias_str))],
     ).map_err(|e| format!("Failed to delete key: {:?}", e))?;
     
     log::info!("Android StrongBox: Key deleted");
