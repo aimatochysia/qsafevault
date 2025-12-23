@@ -18,3 +18,5 @@ src/platform_keystore/fallback_software.rs:
 src/platform_keystore/softhsm_pkcs11.rs:
 src/platform_keystore/softhsm_pkcs11_impl.rs:
 src/ffi.rs:
+
+# env-dep:CARGO_PKG_VERSION=0.1.0
