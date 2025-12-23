@@ -129,7 +129,7 @@ pub fn delete_from_windows_tpm(key_id: &str) -> Result<(), String> {
         
         // Open and delete the key
         if let Ok(tpm_key) = open_tpm_key(provider, key_id) {
-            let _ = NCryptDeleteKey(tpm_key, NCRYPT_FLAGS(0));
+            let _ = NCryptDeleteKey(tpm_key, 0u32);
             log::info!("Windows TPM2: TPM key deleted");
         }
         
