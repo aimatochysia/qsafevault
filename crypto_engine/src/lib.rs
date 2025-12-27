@@ -1322,4 +1322,555 @@ mod tests {
         assert_eq!(crypto_get_mlkem_shared_secret_size(), 32);
         assert_eq!(crypto_get_hmac_sha3_256_size(), 32);
     }
+
+    // ========================================================================
+    // Additional Security Tests
+    // ========================================================================
+
+    #[test]
+    fn test_null_pointer_handling() {
+        // Test that null pointers are properly rejected
+        unsafe {
+            // crypto_random_bytes with null
+            assert_eq!(crypto_random_bytes(std::ptr::null_mut(), 32), CRYPTO_ERROR_NULL_POINTER);
+            
+            // crypto_secure_zero with null
+            assert_eq!(crypto_secure_zero(std::ptr::null_mut(), 32), CRYPTO_ERROR_NULL_POINTER);
+            
+            // crypto_aes_gcm_encrypt with null key
+            let nonce = [0u8; 12];
+            let plaintext = [0u8; 16];
+            let mut output = [0u8; 32];
+            let mut output_len = 0usize;
+            assert_eq!(
+                crypto_aes_gcm_encrypt(
+                    std::ptr::null(),
+                    32,
+                    nonce.as_ptr(),
+                    12,
+                    plaintext.as_ptr(),
+                    16,
+                    output.as_mut_ptr(),
+                    32,
+                    &mut output_len,
+                ),
+                CRYPTO_ERROR_NULL_POINTER
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_key_length() {
+        // Test that invalid key lengths are rejected
+        let key_short = [0x42u8; 16]; // Too short for AES-256
+        let nonce = [0x24u8; 12];
+        let plaintext = b"Hello!";
+        let mut ciphertext = vec![0u8; plaintext.len() + AES_GCM_TAG_SIZE];
+        let mut ciphertext_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_encrypt(
+                key_short.as_ptr(),
+                key_short.len(), // 16 bytes, should require 32
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+            assert_eq!(result, CRYPTO_ERROR_INVALID_LENGTH);
+        }
+    }
+
+    #[test]
+    fn test_invalid_nonce_length() {
+        // Test that invalid nonce lengths are rejected
+        let key = [0x42u8; 32];
+        let nonce_short = [0x24u8; 8]; // Too short, should be 12
+        let plaintext = b"Hello!";
+        let mut ciphertext = vec![0u8; plaintext.len() + AES_GCM_TAG_SIZE];
+        let mut ciphertext_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_encrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce_short.as_ptr(),
+                nonce_short.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+            assert_eq!(result, CRYPTO_ERROR_INVALID_LENGTH);
+        }
+    }
+
+    #[test]
+    fn test_buffer_too_small() {
+        // Test that small output buffers are properly rejected
+        let key = [0x42u8; 32];
+        let nonce = [0x24u8; 12];
+        let plaintext = b"Hello, QSafeVault! This is a longer message.";
+        let mut ciphertext = vec![0u8; 10]; // Too small
+        let mut ciphertext_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_encrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+            assert_eq!(result, CRYPTO_ERROR_BUFFER_TOO_SMALL);
+        }
+    }
+
+    #[test]
+    fn test_empty_plaintext_encryption() {
+        // Test encryption of empty plaintext (valid edge case)
+        let key = [0x42u8; 32];
+        let nonce = [0x24u8; 12];
+        let plaintext: [u8; 0] = [];
+        let mut ciphertext = vec![0u8; AES_GCM_TAG_SIZE]; // Only tag
+        let mut ciphertext_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_encrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                0,
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+            assert_eq!(ciphertext_len, AES_GCM_TAG_SIZE);
+        }
+        
+        // Decrypt empty ciphertext
+        let mut decrypted: [u8; 0] = [];
+        let mut decrypted_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_decrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                ciphertext.as_ptr(),
+                ciphertext_len,
+                decrypted.as_mut_ptr(),
+                0,
+                &mut decrypted_len,
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+            assert_eq!(decrypted_len, 0);
+        }
+    }
+
+    #[test]
+    fn test_large_data_encryption() {
+        // Test encryption of larger data (1 MB)
+        let key = [0x42u8; 32];
+        let nonce = [0x24u8; 12];
+        let plaintext = vec![0xABu8; 1024 * 1024]; // 1 MB
+        let mut ciphertext = vec![0u8; plaintext.len() + AES_GCM_TAG_SIZE];
+        let mut ciphertext_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_encrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+            assert_eq!(ciphertext_len, plaintext.len() + AES_GCM_TAG_SIZE);
+        }
+        
+        // Decrypt and verify
+        let mut decrypted = vec![0u8; plaintext.len()];
+        let mut decrypted_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_decrypt(
+                key.as_ptr(),
+                key.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                ciphertext.as_ptr(),
+                ciphertext_len,
+                decrypted.as_mut_ptr(),
+                decrypted.len(),
+                &mut decrypted_len,
+            );
+            assert_eq!(result, CRYPTO_SUCCESS);
+            assert_eq!(decrypted_len, plaintext.len());
+        }
+        
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_argon2id_determinism() {
+        // Test that Argon2id produces consistent results
+        let password = b"secure_password_123!";
+        let salt = b"random_salt_bytes_16";
+        let mut output1 = [0u8; 32];
+        let mut output2 = [0u8; 32];
+
+        unsafe {
+            crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt.as_ptr(),
+                salt.len(),
+                16384,
+                1,
+                1,
+                output1.as_mut_ptr(),
+                output1.len(),
+            );
+            
+            crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt.as_ptr(),
+                salt.len(),
+                16384,
+                1,
+                1,
+                output2.as_mut_ptr(),
+                output2.len(),
+            );
+        }
+
+        // Same inputs should produce same output
+        assert_eq!(output1, output2);
+    }
+
+    #[test]
+    fn test_argon2id_different_salts() {
+        // Test that different salts produce different outputs
+        let password = b"secure_password";
+        let salt1 = b"salt_number_one!";
+        let salt2 = b"salt_number_two!";
+        let mut output1 = [0u8; 32];
+        let mut output2 = [0u8; 32];
+
+        unsafe {
+            crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt1.as_ptr(),
+                salt1.len(),
+                16384,
+                1,
+                1,
+                output1.as_mut_ptr(),
+                output1.len(),
+            );
+            
+            crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                salt2.as_ptr(),
+                salt2.len(),
+                16384,
+                1,
+                1,
+                output2.as_mut_ptr(),
+                output2.len(),
+            );
+        }
+
+        // Different salts should produce different outputs
+        assert_ne!(output1, output2);
+    }
+
+    #[test]
+    fn test_argon2id_short_salt_rejected() {
+        // Test that salt shorter than 8 bytes is rejected
+        let password = b"password";
+        let short_salt = b"short"; // Only 5 bytes
+        let mut output = [0u8; 32];
+
+        unsafe {
+            let result = crypto_argon2id_derive(
+                password.as_ptr(),
+                password.len(),
+                short_salt.as_ptr(),
+                short_salt.len(),
+                16384,
+                1,
+                1,
+                output.as_mut_ptr(),
+                output.len(),
+            );
+            assert_eq!(result, CRYPTO_ERROR_INVALID_LENGTH);
+        }
+    }
+
+    #[test]
+    fn test_hkdf_different_info() {
+        // Test that different info produces different outputs
+        let ikm = b"input key material";
+        let salt = b"random salt";
+        let info1 = b"context info 1";
+        let info2 = b"context info 2";
+        let mut output1 = [0u8; 32];
+        let mut output2 = [0u8; 32];
+
+        unsafe {
+            crypto_hkdf_sha3_derive(
+                ikm.as_ptr(),
+                ikm.len(),
+                salt.as_ptr(),
+                salt.len(),
+                info1.as_ptr(),
+                info1.len(),
+                output1.as_mut_ptr(),
+                output1.len(),
+            );
+            
+            crypto_hkdf_sha3_derive(
+                ikm.as_ptr(),
+                ikm.len(),
+                salt.as_ptr(),
+                salt.len(),
+                info2.as_ptr(),
+                info2.len(),
+                output2.as_mut_ptr(),
+                output2.len(),
+            );
+        }
+
+        // Different info should produce different outputs
+        assert_ne!(output1, output2);
+    }
+
+    #[test]
+    fn test_hkdf_variable_output_length() {
+        // Test HKDF with different output lengths
+        let ikm = b"input key material";
+        let salt = b"random salt";
+        let info = b"context info";
+        let mut output_16 = [0u8; 16];
+        let mut output_64 = [0u8; 64];
+
+        unsafe {
+            let result1 = crypto_hkdf_sha3_derive(
+                ikm.as_ptr(),
+                ikm.len(),
+                salt.as_ptr(),
+                salt.len(),
+                info.as_ptr(),
+                info.len(),
+                output_16.as_mut_ptr(),
+                output_16.len(),
+            );
+            assert_eq!(result1, CRYPTO_SUCCESS);
+            
+            let result2 = crypto_hkdf_sha3_derive(
+                ikm.as_ptr(),
+                ikm.len(),
+                salt.as_ptr(),
+                salt.len(),
+                info.as_ptr(),
+                info.len(),
+                output_64.as_mut_ptr(),
+                output_64.len(),
+            );
+            assert_eq!(result2, CRYPTO_SUCCESS);
+        }
+
+        // First 16 bytes should match
+        assert_eq!(&output_16[..], &output_64[..16]);
+    }
+
+    #[test]
+    fn test_x25519_key_uniqueness() {
+        // Test that each keypair is unique
+        let mut pk1 = [0u8; X25519_PUBLIC_KEY_SIZE];
+        let mut sk1 = [0u8; X25519_SECRET_KEY_SIZE];
+        let mut pk2 = [0u8; X25519_PUBLIC_KEY_SIZE];
+        let mut sk2 = [0u8; X25519_SECRET_KEY_SIZE];
+
+        unsafe {
+            crypto_x25519_keypair(pk1.as_mut_ptr(), sk1.as_mut_ptr());
+            crypto_x25519_keypair(pk2.as_mut_ptr(), sk2.as_mut_ptr());
+        }
+
+        // Keys should be different
+        assert_ne!(pk1, pk2);
+        assert_ne!(sk1, sk2);
+    }
+
+    #[test]
+    fn test_mlkem_key_uniqueness() {
+        // Test that each ML-KEM keypair is unique
+        let mut pk1 = vec![0u8; MLKEM_PUBLIC_KEY_SIZE];
+        let mut sk1 = vec![0u8; MLKEM_SECRET_KEY_SIZE];
+        let mut pk2 = vec![0u8; MLKEM_PUBLIC_KEY_SIZE];
+        let mut sk2 = vec![0u8; MLKEM_SECRET_KEY_SIZE];
+
+        unsafe {
+            crypto_mlkem_keypair(pk1.as_mut_ptr(), sk1.as_mut_ptr());
+            crypto_mlkem_keypair(pk2.as_mut_ptr(), sk2.as_mut_ptr());
+        }
+
+        // Keys should be different
+        assert_ne!(pk1, pk2);
+        assert_ne!(sk1, sk2);
+    }
+
+    #[test]
+    fn test_hybrid_encapsulation_produces_different_results() {
+        // Test that each encapsulation produces different ciphertext/shared secret
+        let mut pk = vec![0u8; HYBRID_PUBLIC_KEY_SIZE];
+        let mut sk = vec![0u8; HYBRID_SECRET_KEY_SIZE];
+
+        unsafe {
+            crypto_hybrid_keypair(pk.as_mut_ptr(), sk.as_mut_ptr());
+        }
+
+        let mut ct1 = vec![0u8; HYBRID_CIPHERTEXT_SIZE];
+        let mut ss1 = [0u8; HYBRID_SHARED_SECRET_SIZE];
+        let mut ct2 = vec![0u8; HYBRID_CIPHERTEXT_SIZE];
+        let mut ss2 = [0u8; HYBRID_SHARED_SECRET_SIZE];
+
+        unsafe {
+            crypto_hybrid_encapsulate(pk.as_ptr(), ct1.as_mut_ptr(), ss1.as_mut_ptr());
+            crypto_hybrid_encapsulate(pk.as_ptr(), ct2.as_mut_ptr(), ss2.as_mut_ptr());
+        }
+
+        // Each encapsulation should produce different results
+        assert_ne!(ct1, ct2);
+        assert_ne!(ss1, ss2);
+    }
+
+    #[test]
+    fn test_secure_zero_effectiveness() {
+        // Test that secure_zero actually zeros the buffer
+        let mut buf = [0xFFu8; 256];
+        
+        // Verify buffer is not zero
+        assert!(buf.iter().any(|&b| b != 0));
+        
+        unsafe {
+            crypto_secure_zero(buf.as_mut_ptr(), buf.len());
+        }
+        
+        // Verify buffer is now all zeros
+        assert!(buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_constant_time_compare_equal_length_different_content() {
+        let a = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let b = [1u8, 2, 3, 4, 5, 6, 7, 9]; // Last byte different
+
+        unsafe {
+            assert_eq!(
+                crypto_constant_time_compare(a.as_ptr(), a.len(), b.as_ptr(), b.len()),
+                CRYPTO_ERROR_DECRYPTION_FAILED
+            );
+        }
+    }
+
+    #[test]
+    fn test_hmac_different_keys() {
+        // Test that different keys produce different MACs
+        let key1 = b"secret_key_one";
+        let key2 = b"secret_key_two";
+        let message = b"Hello, World!";
+        let mut mac1 = [0u8; HMAC_SHA3_256_SIZE];
+        let mut mac2 = [0u8; HMAC_SHA3_256_SIZE];
+
+        unsafe {
+            crypto_hmac_sha3_256(
+                key1.as_ptr(),
+                key1.len(),
+                message.as_ptr(),
+                message.len(),
+                mac1.as_mut_ptr(),
+                mac1.len(),
+            );
+            
+            crypto_hmac_sha3_256(
+                key2.as_ptr(),
+                key2.len(),
+                message.as_ptr(),
+                message.len(),
+                mac2.as_mut_ptr(),
+                mac2.len(),
+            );
+        }
+
+        // Different keys should produce different MACs
+        assert_ne!(mac1, mac2);
+    }
+
+    #[test]
+    fn test_aes_gcm_wrong_key_fails() {
+        // Test that decryption with wrong key fails
+        let key1 = [0x42u8; 32];
+        let key2 = [0x43u8; 32]; // Different key
+        let nonce = [0x24u8; 12];
+        let plaintext = b"Secret message";
+        
+        let mut ciphertext = vec![0u8; plaintext.len() + AES_GCM_TAG_SIZE];
+        let mut ciphertext_len = 0usize;
+        
+        // Encrypt with key1
+        unsafe {
+            crypto_aes_gcm_encrypt(
+                key1.as_ptr(),
+                key1.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                plaintext.as_ptr(),
+                plaintext.len(),
+                ciphertext.as_mut_ptr(),
+                ciphertext.len(),
+                &mut ciphertext_len,
+            );
+        }
+        
+        // Try to decrypt with key2
+        let mut decrypted = vec![0u8; plaintext.len()];
+        let mut decrypted_len = 0usize;
+        
+        unsafe {
+            let result = crypto_aes_gcm_decrypt(
+                key2.as_ptr(),
+                key2.len(),
+                nonce.as_ptr(),
+                nonce.len(),
+                ciphertext.as_ptr(),
+                ciphertext_len,
+                decrypted.as_mut_ptr(),
+                decrypted.len(),
+                &mut decrypted_len,
+            );
+            assert_eq!(result, CRYPTO_ERROR_DECRYPTION_FAILED);
+        }
+    }
 }

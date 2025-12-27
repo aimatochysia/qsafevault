@@ -197,9 +197,20 @@ Security
 - [Done] Fast unlock via secure storage (optional)
 - [Done] Atomic writes, backups, multi‑part storage
 - [Done] WebRTC sync with PIN rendezvous and device trust
+- [Done] Rust crypto engine with post-quantum support (ML-KEM-768)
+- [Done] SoftHSM2/PKCS#11 hardware security module support
 - [Planned] macOS/iOS support
 - [Planned] Third‑party security audit
-- [Planned] PQ/hybrid crypto options
+
+---
+
+## Documentation
+
+Additional documentation is available in the `docs/` directory:
+
+- [Crypto Engine Guide](docs/CRYPTO_ENGINE.md) - Rust FFI library for cryptographic operations
+- [SoftHSM2 Installation](docs/SOFTHSM_INSTALLATION.md) - Hardware Security Module setup guide
+- [Sync Guide](SYNC_GUIDE.md) - Device-to-device synchronization
 
 ---
 
@@ -210,5 +221,6 @@ License
 
 Acknowledgements
 - cryptography, pointycastle, flutter_secure_storage, flutter_webrtc and the Flutter ecosystem.
+- Rust cryptographic crates: aes-gcm, argon2, x25519-dalek, pqcrypto-mlkem, cryptoki.
 
 ---

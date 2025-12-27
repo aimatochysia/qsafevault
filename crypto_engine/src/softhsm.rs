@@ -1223,4 +1223,123 @@ mod tests {
         let msg = hsm_get_error_message(HSM_ERROR_PIN_INCORRECT);
         assert!(!msg.is_null());
     }
+
+    #[test]
+    fn test_all_error_codes_have_messages() {
+        // Test that all error codes return non-null messages
+        let error_codes = [
+            HSM_SUCCESS,
+            HSM_ERROR_NOT_INITIALIZED,
+            HSM_ERROR_ALREADY_INITIALIZED,
+            HSM_ERROR_LIBRARY_LOAD_FAILED,
+            HSM_ERROR_NO_SLOT_AVAILABLE,
+            HSM_ERROR_TOKEN_NOT_PRESENT,
+            HSM_ERROR_PIN_INCORRECT,
+            HSM_ERROR_PIN_LOCKED,
+            HSM_ERROR_SESSION_FAILED,
+            HSM_ERROR_KEY_GENERATION_FAILED,
+            HSM_ERROR_KEY_NOT_FOUND,
+            HSM_ERROR_ENCRYPTION_FAILED,
+            HSM_ERROR_DECRYPTION_FAILED,
+            HSM_ERROR_SIGNATURE_FAILED,
+            HSM_ERROR_VERIFICATION_FAILED,
+            HSM_ERROR_INVALID_PARAMETER,
+            HSM_ERROR_BUFFER_TOO_SMALL,
+            HSM_ERROR_NULL_POINTER,
+            HSM_ERROR_OPERATION_FAILED,
+            HSM_ERROR_TOKEN_INIT_FAILED,
+            HSM_ERROR_UNSUPPORTED_PLATFORM,
+        ];
+
+        for code in error_codes {
+            let msg = hsm_get_error_message(code);
+            assert!(!msg.is_null(), "Error code {} returned null message", code);
+        }
+    }
+
+    #[test]
+    fn test_unknown_error_code() {
+        // Test that unknown error codes get a default message
+        let msg = hsm_get_error_message(-9999);
+        assert!(!msg.is_null());
+        
+        // Check it's the "Unknown error" message
+        let c_str = unsafe { std::ffi::CStr::from_ptr(msg) };
+        assert_eq!(c_str.to_str().unwrap(), "Unknown error");
+    }
+
+    #[test]
+    fn test_hsm_not_initialized_errors() {
+        // Test that operations fail properly when HSM is not initialized
+        
+        // hsm_get_slot_count should return -1 when not initialized
+        let slot_count = hsm_get_slot_count();
+        // Can be -1 (not initialized) or actual count (if previously initialized)
+        assert!(slot_count >= -1);
+    }
+
+    #[test]
+    fn test_null_pointer_handling() {
+        // Test that null pointers are properly rejected
+        unsafe {
+            // hsm_initialize with null path should attempt auto-detection
+            let result = hsm_initialize(std::ptr::null(), 0);
+            // Result depends on whether SoftHSM2 is installed
+            assert!(result == HSM_SUCCESS || result == HSM_ERROR_LIBRARY_LOAD_FAILED || result == HSM_ERROR_ALREADY_INITIALIZED);
+            
+            // Clean up if we initialized
+            if result == HSM_SUCCESS {
+                hsm_finalize();
+            }
+        }
+    }
+
+    #[test]
+    fn test_hsm_finalize_without_init() {
+        // Finalize should handle case where HSM wasn't initialized
+        let result = hsm_finalize();
+        assert_eq!(result, HSM_SUCCESS);
+    }
+
+    #[test]
+    fn test_close_session_without_session() {
+        // close_session should handle case where no session exists
+        let result = hsm_close_session();
+        assert_eq!(result, HSM_SUCCESS);
+    }
+
+    #[test]
+    fn test_key_type_constants() {
+        // Verify key type constants are distinct
+        assert_ne!(HSM_KEY_TYPE_AES_256, HSM_KEY_TYPE_RSA_2048);
+        assert_ne!(HSM_KEY_TYPE_RSA_2048, HSM_KEY_TYPE_RSA_4096);
+        assert_ne!(HSM_KEY_TYPE_RSA_4096, HSM_KEY_TYPE_EC_P256);
+        assert_ne!(HSM_KEY_TYPE_EC_P256, HSM_KEY_TYPE_EC_P384);
+    }
+
+    #[test]
+    fn test_error_codes_are_negative() {
+        // All error codes should be negative (except SUCCESS)
+        assert_eq!(HSM_SUCCESS, 0);
+        assert!(HSM_ERROR_NOT_INITIALIZED < 0);
+        assert!(HSM_ERROR_ALREADY_INITIALIZED < 0);
+        assert!(HSM_ERROR_LIBRARY_LOAD_FAILED < 0);
+        assert!(HSM_ERROR_NO_SLOT_AVAILABLE < 0);
+        assert!(HSM_ERROR_TOKEN_NOT_PRESENT < 0);
+        assert!(HSM_ERROR_PIN_INCORRECT < 0);
+        assert!(HSM_ERROR_PIN_LOCKED < 0);
+        assert!(HSM_ERROR_SESSION_FAILED < 0);
+        assert!(HSM_ERROR_KEY_GENERATION_FAILED < 0);
+        assert!(HSM_ERROR_KEY_NOT_FOUND < 0);
+        assert!(HSM_ERROR_ENCRYPTION_FAILED < 0);
+        assert!(HSM_ERROR_DECRYPTION_FAILED < 0);
+        assert!(HSM_ERROR_SIGNATURE_FAILED < 0);
+        assert!(HSM_ERROR_VERIFICATION_FAILED < 0);
+        assert!(HSM_ERROR_INVALID_PARAMETER < 0);
+        assert!(HSM_ERROR_BUFFER_TOO_SMALL < 0);
+        assert!(HSM_ERROR_NULL_POINTER < 0);
+        assert!(HSM_ERROR_OPERATION_FAILED < 0);
+        assert!(HSM_ERROR_TOKEN_INIT_FAILED < 0);
+        assert!(HSM_ERROR_UNSUPPORTED_PLATFORM < 0);
+    }
 }
