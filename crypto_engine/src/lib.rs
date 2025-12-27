@@ -9,6 +9,7 @@
 //! - ML-KEM-768 (post-quantum) key encapsulation
 //! - Hybrid X25519 + ML-KEM quantum-resistant key exchange
 //! - Secure memory zeroization
+//! - SoftHSM2/PKCS#11 support (Linux, macOS, Windows only)
 
 use std::ptr;
 use std::slice;
@@ -24,6 +25,10 @@ use rand::RngCore;
 use sha3::Sha3_256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroize;
+
+// SoftHSM2/PKCS#11 module (only for desktop platforms)
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+pub mod softhsm;
 
 type HmacSha3_256 = Hmac<Sha3_256>;
 

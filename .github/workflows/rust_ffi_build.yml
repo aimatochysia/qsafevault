@@ -27,6 +27,11 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Install SoftHSM2 for testing
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y softhsm2
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -100,6 +105,9 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Install SoftHSM2 for testing
+        run: brew install softhsm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

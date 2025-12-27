@@ -38,9 +38,15 @@ getrandom = { version = "0.2", features = ["js"] }  # js feature for WASM suppor
 # Libc for FFI types
 libc = "0.2"
 
+# PKCS#11 / SoftHSM2 support (only for desktop platforms)
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))'.dependencies]
+cryptoki = "0.7"
+cryptoki-sys = "0.1"
+
 [features]
 default = []
 wasm = []
+softhsm = []  # Enable SoftHSM2 support
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
