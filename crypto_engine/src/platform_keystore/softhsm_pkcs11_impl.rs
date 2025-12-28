@@ -128,11 +128,10 @@ pub fn seal_with_softhsm(
         ulParameterLen: 0,
     };
     
-    let key_len: CK_ULONG = 32;
     let key_template = vec![
         CK_ATTRIBUTE::new(CKA_CLASS).with_ck_ulong(&CKO_SECRET_KEY),
         CK_ATTRIBUTE::new(CKA_KEY_TYPE).with_ck_ulong(&CKK_AES),
-        CK_ATTRIBUTE::new(CKA_VALUE_LEN).with_ck_ulong(&key_len),
+        CK_ATTRIBUTE::new(CKA_VALUE_LEN).with_ck_ulong(&32u64),
         CK_ATTRIBUTE::new(CKA_TOKEN).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_PRIVATE).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_SENSITIVE).with_bool(&CK_TRUE),      // Key is sensitive
@@ -255,7 +254,7 @@ pub fn unseal_with_softhsm(
     let decrypt_mechanism = CK_MECHANISM {
         mechanism: CKM_AES_CBC_PAD,
         pParameter: iv.as_ptr() as *mut _,
-        ulParameterLen: iv.len() as CK_ULONG,
+        ulParameterLen: iv.len() as u64,
     };
     
     // Initialize decryption
