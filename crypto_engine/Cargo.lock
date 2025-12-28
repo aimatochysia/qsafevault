@@ -199,6 +199,7 @@ dependencies = [
  "libc",
  "log",
  "pkcs11",
+ "pqcrypto-dilithium",
  "pqcrypto-mlkem",
  "pqcrypto-traits",
  "rand_core",
@@ -660,6 +661,19 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "pqcrypto-dilithium"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "685de0fa68c6786559d5fcdaa414f0cd68ef3f5d162f61823bd7424cd276726f"
+dependencies = [
+ "cc",
+ "glob",
+ "libc",
+ "pqcrypto-internals",
+ "pqcrypto-traits",
+]
 
 [[package]]
 name = "pqcrypto-internals"

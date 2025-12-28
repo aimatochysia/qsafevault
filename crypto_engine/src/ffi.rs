@@ -730,7 +730,7 @@ pub extern "C" fn pqcrypto_get_version(
     }
 
     let version = format!(
-        r#"{{"version":"{}","algorithms":{{"kem":"ML-KEM-768 (Kyber)","classical":"X25519","kdf":"HKDF-SHA3-256","cipher":"AES-256-GCM","hash":"SHA3-256"}},"fips_compatible":true,"post_quantum":true}}"#,
+        r#"{{"version":"{}","algorithms":{{"kem":"ML-KEM-768 (Kyber)","signature":"Dilithium3","kdf":"HKDF-SHA3-256","cipher":"AES-256-GCM","hash":"SHA3-256"}},"fips_compatible":true,"post_quantum":true,"classical_fallback":false}}"#,
         env!("CARGO_PKG_VERSION")
     );
     
@@ -739,5 +739,235 @@ pub extern "C" fn pqcrypto_get_version(
         STATUS_OK
     } else {
         STATUS_ERROR
+    }
+}
+
+// =============================================================================
+// Post-Quantum Digital Signatures (Dilithium3)
+// =============================================================================
+
+use crate::pqc_signature::{PqcSigningKeypair, PqcSignature, verify as pqc_verify};
+
+// Global storage for signing keypairs
+lazy_static::lazy_static! {
+    static ref SIGNING_KEYPAIR_HANDLES: Mutex<HashMap<u64, PqcSigningKeypair>> = Mutex::new(HashMap::new());
+}
+
+/// Generate a new Dilithium3 signing keypair
+/// Returns handle to keypair, public key written to out parameter
+#[no_mangle]
+pub extern "C" fn pqcrypto_generate_signing_keypair(
+    keypair_handle_out: *mut u64,
+    public_key_out: *mut *mut u8,
+    public_key_len_out: *mut usize,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if keypair_handle_out.is_null() || public_key_out.is_null() || public_key_len_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        // Generate keypair
+        let keypair = PqcSigningKeypair::generate();
+        let pk_bytes = keypair.public_key_bytes();
+        
+        // Allocate and copy public key
+        let pk_len = pk_bytes.len();
+        let pk_ptr = unsafe {
+            let ptr = libc::malloc(pk_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(pk_bytes.as_ptr(), ptr, pk_len);
+            ptr
+        };
+        
+        // Store keypair and return handle
+        let handle = next_handle();
+        SIGNING_KEYPAIR_HANDLES.lock().unwrap().insert(handle, keypair);
+        
+        unsafe {
+            *keypair_handle_out = handle;
+            *public_key_out = pk_ptr;
+            *public_key_len_out = pk_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Sign a message using Dilithium3
+/// Returns detached signature
+#[no_mangle]
+pub extern "C" fn pqcrypto_sign_message(
+    keypair_handle: u64,
+    message: *const u8,
+    message_len: usize,
+    signature_out: *mut *mut u8,
+    signature_len_out: *mut usize,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if message.is_null() || signature_out.is_null() || signature_len_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        let message_bytes = unsafe { slice::from_raw_parts(message, message_len) };
+        
+        // Get keypair
+        let keypairs = SIGNING_KEYPAIR_HANDLES.lock().unwrap();
+        let keypair = keypairs.get(&keypair_handle)
+            .ok_or("Invalid signing keypair handle")?;
+        
+        // Sign
+        let signature = keypair.sign(message_bytes);
+        let sig_bytes = signature.to_bytes();
+        
+        // Allocate and copy signature
+        let sig_len = sig_bytes.len();
+        let sig_ptr = unsafe {
+            let ptr = libc::malloc(sig_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(sig_bytes.as_ptr(), ptr, sig_len);
+            ptr
+        };
+        
+        unsafe {
+            *signature_out = sig_ptr;
+            *signature_len_out = sig_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Verify a Dilithium3 signature
+/// Returns STATUS_OK if valid, STATUS_ERROR if invalid
+#[no_mangle]
+pub extern "C" fn pqcrypto_verify_signature(
+    public_key: *const u8,
+    public_key_len: usize,
+    message: *const u8,
+    message_len: usize,
+    signature: *const u8,
+    signature_len: usize,
+    valid_out: *mut c_int,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if public_key.is_null() || message.is_null() || signature.is_null() || valid_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| -> Result<(), String> {
+        let pk_bytes = unsafe { slice::from_raw_parts(public_key, public_key_len) };
+        let message_bytes = unsafe { slice::from_raw_parts(message, message_len) };
+        let sig_bytes = unsafe { slice::from_raw_parts(signature, signature_len) };
+        
+        // Deserialize signature
+        let sig = PqcSignature::from_bytes(sig_bytes)
+            .map_err(|e| format!("Invalid signature: {}", e))?;
+        
+        // Verify
+        let valid = pqc_verify(pk_bytes, message_bytes, &sig)
+            .map_err(|e| format!("Verification error: {}", e))?;
+        
+        unsafe {
+            *valid_out = if valid { 1 } else { 0 };
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Free a signing keypair handle
+#[no_mangle]
+pub extern "C" fn pqcrypto_free_signing_keypair(handle: u64) -> c_int {
+    SIGNING_KEYPAIR_HANDLES.lock().unwrap().remove(&handle);
+    STATUS_OK
+}
+
+/// Get signing keypair public key bytes
+#[no_mangle]
+pub extern "C" fn pqcrypto_get_signing_public_key(
+    keypair_handle: u64,
+    public_key_out: *mut *mut u8,
+    public_key_len_out: *mut usize,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if public_key_out.is_null() || public_key_len_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        // Get keypair
+        let keypairs = SIGNING_KEYPAIR_HANDLES.lock().unwrap();
+        let keypair = keypairs.get(&keypair_handle)
+            .ok_or("Invalid signing keypair handle")?;
+        
+        let pk_bytes = keypair.public_key_bytes();
+        
+        // Allocate and copy public key
+        let pk_len = pk_bytes.len();
+        let pk_ptr = unsafe {
+            let ptr = libc::malloc(pk_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(pk_bytes.as_ptr(), ptr, pk_len);
+            ptr
+        };
+        
+        unsafe {
+            *public_key_out = pk_ptr;
+            *public_key_len_out = pk_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
     }
 }
