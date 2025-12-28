@@ -21,8 +21,10 @@ pub fn is_tpm_available() -> bool {
 pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {
     #[cfg(feature = "tpm")]
     {
+        // Use the full tss-esapi implementation
         log::info!("Linux TPM2: Using tss-esapi for sealing key '{}'", key_id);
-        let (_wrapped_data, nonce) = linux_tpm_impl::seal_with_linux_tpm(key_id, key_data)?;
+        let (wrapped_data, nonce) = linux_tpm_impl::seal_with_linux_tpm(key_id, key_data)?;
+        // Store nonce alongside the wrapped data for unsealing
         store_seal_metadata(key_id, &nonce)?;
         log::info!("Linux TPM2: Key sealed successfully");
         Ok(())
@@ -30,7 +32,6 @@ pub fn seal_private_key(key_id: &str, key_data: &[u8]) -> Result<(), String> {
     
     #[cfg(not(feature = "tpm"))]
     {
-        let _ = key_data;
         log::warn!("Linux TPM2 support not compiled (enable 'tpm' feature)");
         Err(format!(
             "Linux TPM2 support not compiled - using fallback for: {}",
@@ -73,11 +74,12 @@ pub fn unseal_private_key(key_id: &str) -> Result<Vec<u8>, String> {
 
 /// Delete private key from Linux TPM2
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 pub fn delete_private_key(key_id: &str) -> Result<(), String> {
     #[cfg(feature = "tpm")]
     {
+        // Use the full tss-esapi implementation
         linux_tpm_impl::delete_from_linux_tpm(key_id)?;
+        // Also delete metadata
         let _ = delete_seal_metadata(key_id);
         log::info!("Linux TPM2: Key deleted successfully");
         Ok(())
@@ -85,7 +87,7 @@ pub fn delete_private_key(key_id: &str) -> Result<(), String> {
     
     #[cfg(not(feature = "tpm"))]
     {
-        let _ = key_id;
+        // No-op when TPM not compiled
         Ok(())
     }
 }
@@ -132,19 +134,16 @@ fn delete_seal_metadata(key_id: &str) -> Result<(), String> {
 
 // Stub implementations for non-Linux platforms
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code)]
 pub fn seal_private_key(_key_id: &str, _key_data: &[u8]) -> Result<(), String> {
     Err("Linux TPM not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code)]
 pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
     Err("Linux TPM not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
-#[allow(dead_code)]
 pub fn delete_private_key(_key_id: &str) -> Result<(), String> {
     Err("Linux TPM not available on this platform".to_string())
 }

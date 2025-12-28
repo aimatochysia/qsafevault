@@ -213,7 +213,6 @@ impl PlatformKeystore {
     }
     
     /// Delete a sealed key from all possible locations
-    #[allow(dead_code)]
     pub fn delete_key(key_id: &str) -> Result<(), String> {
         log::info!("Deleting key from all possible locations: {}", key_id);
         
@@ -288,7 +287,6 @@ fn unseal_with_tpm(key_id: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Delete from TPM
-#[allow(dead_code)]
 fn delete_from_tpm(key_id: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {

@@ -43,19 +43,16 @@ pub fn delete_private_key(key_id: &str) -> Result<(), String> {
 
 // Stub implementations for non-iOS platforms
 #[cfg(not(target_os = "ios"))]
-#[allow(dead_code)]
 pub fn seal_private_key(_key_id: &str, _key_data: &[u8]) -> Result<(), String> {
     Err("iOS Secure Enclave not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "ios"))]
-#[allow(dead_code)]
 pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
     Err("iOS Secure Enclave not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "ios"))]
-#[allow(dead_code)]
 pub fn delete_private_key(_key_id: &str) -> Result<(), String> {
     Err("iOS Secure Enclave not available on this platform".to_string())
 }

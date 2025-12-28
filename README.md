@@ -520,25 +520,9 @@ RUN softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin
 - [Done] WebRTC sync with PIN rendezvous and device trust
 - [Done] Hybrid post-quantum cryptography (Kyber ML-KEM + X25519)
 - [Done] Platform secure storage auto-detection (TPM2, SoftHSM, Secure Enclave)
-- [Done] Rust crypto engine with comprehensive FFI bindings
 - [Planned] macOS/iOS support (in progress)
 - [Planned] Third‑party security audit
 - [Planned] Full TPM2/SoftHSM sealing implementation
-
----
-
-## Documentation
-
-Additional documentation is available in the `docs/` directory:
-
-- [Getting Started](docs/GETTING_STARTED.md) - App onboarding guide
-- [Security Architecture](docs/SECURITY_ARCHITECTURE.md) - Algorithms and security design
-- [Crypto Engine Guide](docs/CRYPTO_ENGINE.md) - Rust FFI library for cryptographic operations
-- [Crypto Architecture](docs/CRYPTO_ARCHITECTURE.md) - Technical architecture details
-- [SoftHSM2 Installation](docs/SOFTHSM_INSTALLATION.md) - Hardware Security Module setup guide
-- [Sync Guide](docs/SYNC_GUIDE.md) - Device-to-device synchronization
-- [Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md) - Implementation details
-- [Testing Guide](docs/TESTING_GUIDE.md) - How to run tests
 
 ---
 

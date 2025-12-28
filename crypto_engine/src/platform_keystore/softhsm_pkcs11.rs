@@ -60,8 +60,9 @@ pub fn seal_private_key(_key_id: &str, _key_data: &[u8]) -> Result<(), String> {
 
 /// Unseal private key from SoftHSM
 #[cfg(not(target_os = "android"))]
-#[allow(dead_code)]
-pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
+pub fn unseal_private_key(key_id: &str) -> Result<Vec<u8>, String> {
+    // Note: This is a simplified interface - full implementation requires
+    // passing wrapped_data and nonce from external storage
     log::warn!("SoftHSM unsealing - requires wrapped data from storage");
     Err("Unseal requires wrapped_data and nonce parameters".to_string())
 }
@@ -73,7 +74,6 @@ pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
 
 /// Delete private key from SoftHSM
 #[cfg(not(target_os = "android"))]
-#[allow(dead_code)]
 pub fn delete_private_key(key_id: &str) -> Result<(), String> {
     softhsm_pkcs11_impl::delete_from_softhsm(key_id, None)?;
     log::info!("SoftHSM: Key deleted");

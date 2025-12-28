@@ -5,7 +5,6 @@
 // Keys are stored securely within the HSM token and never extracted
 
 #![cfg(not(target_os = "android"))]
-#![allow(static_mut_refs)]
 
 use std::path::PathBuf;
 use std::sync::Once;
@@ -129,11 +128,10 @@ pub fn seal_with_softhsm(
         ulParameterLen: 0,
     };
     
-    let key_len: CK_ULONG = 32;
     let key_template = vec![
         CK_ATTRIBUTE::new(CKA_CLASS).with_ck_ulong(&CKO_SECRET_KEY),
         CK_ATTRIBUTE::new(CKA_KEY_TYPE).with_ck_ulong(&CKK_AES),
-        CK_ATTRIBUTE::new(CKA_VALUE_LEN).with_ck_ulong(&key_len),
+        CK_ATTRIBUTE::new(CKA_VALUE_LEN).with_ck_ulong(&32u64),
         CK_ATTRIBUTE::new(CKA_TOKEN).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_PRIVATE).with_bool(&CK_TRUE),
         CK_ATTRIBUTE::new(CKA_SENSITIVE).with_bool(&CK_TRUE),      // Key is sensitive
@@ -190,7 +188,7 @@ pub fn seal_with_softhsm(
 }
 
 /// Unwraps a master key using PKCS#11 SoftHSM
-#[allow(dead_code)]
+/// The wrapping key is accessed within the HSM, never extracted
 pub fn unseal_with_softhsm(
     key_id: &str,
     _wrapped_key: &[u8],
@@ -256,7 +254,7 @@ pub fn unseal_with_softhsm(
     let decrypt_mechanism = CK_MECHANISM {
         mechanism: CKM_AES_CBC_PAD,
         pParameter: iv.as_ptr() as *mut _,
-        ulParameterLen: iv.len() as CK_ULONG,
+        ulParameterLen: iv.len() as u64,
     };
     
     // Initialize decryption
@@ -279,7 +277,6 @@ pub fn unseal_with_softhsm(
 }
 
 /// Deletes a key from SoftHSM
-#[allow(dead_code)]
 pub fn delete_from_softhsm(key_id: &str, pin: Option<&str>) -> Result<(), String> {
     log::info!("SoftHSM: Deleting key '{}'", key_id);
     

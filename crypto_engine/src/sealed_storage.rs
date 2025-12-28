@@ -78,7 +78,6 @@ impl SealedBlob {
     }
 
     /// Create a new sealed blob with backend information
-    #[allow(dead_code)]
     pub fn new_with_backend(
         algorithm: AlgorithmId,
         ciphertext: Vec<u8>,
