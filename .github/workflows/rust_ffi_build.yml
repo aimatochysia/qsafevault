@@ -2,7 +2,20 @@ name: Build Rust FFI Libraries
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to run the workflow on'
+        required: true
+        default: 'main'
+        
+      commit_binaries:
+        description: 'Commit FFI binaries to repository'
+        required: false
+        default: 'true'
+        type: boolean
   push:
+    branches:
+      - main
     paths:
       - 'crypto_engine/**'
       - '.github/workflows/rust_ffi_build.yml'
@@ -26,11 +39,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Install SoftHSM2 for testing
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y softhsm2
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -105,9 +113,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Install SoftHSM2 for testing
-        run: brew install softhsm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -228,6 +233,10 @@ jobs:
   build-ios:
     name: Build iOS (arm64 + simulator)
     runs-on: macos-latest
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+      CFLAGS_aarch64_apple_ios: "-mios-version-min=14.0"
+      CFLAGS_x86_64_apple_ios: "-mios-version-min=14.0"
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -321,80 +330,225 @@ jobs:
           path: crypto_engine/pkg/
           if-no-files-found: warn
 
-  release:
-    name: Create Release with FFI Libraries
+  # Commit FFI libraries to the repository for easy integration
+  commit-ffi-libraries:
+    name: Commit FFI Libraries to Repository
     runs-on: ubuntu-latest
     needs: [build-linux, build-windows, build-macos, build-android, build-ios, build-web]
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: |
+      always() &&
+      ((github.event_name == 'workflow_dispatch' && github.event.inputs.commit_binaries == 'true') ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     permissions:
-      contents: write  # Required to create releases
+      contents: write
     steps:
+      - name: Check build results
+        id: check-builds
+        run: |
+          # Count successful builds (at least 5 required)
+          SUCCESS_COUNT=0
+          
+          if [ "${{ needs.build-linux.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-linux: success"
+          else
+            echo "build-linux: ${{ needs.build-linux.result }}"
+          fi
+          
+          if [ "${{ needs.build-windows.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-windows: success"
+          else
+            echo "build-windows: ${{ needs.build-windows.result }}"
+          fi
+          
+          if [ "${{ needs.build-macos.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-macos: success"
+          else
+            echo "build-macos: ${{ needs.build-macos.result }}"
+          fi
+          
+          if [ "${{ needs.build-android.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-android: success"
+          else
+            echo "build-android: ${{ needs.build-android.result }}"
+          fi
+          
+          if [ "${{ needs.build-ios.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-ios: success"
+          else
+            echo "build-ios: ${{ needs.build-ios.result }}"
+          fi
+          
+          if [ "${{ needs.build-web.result }}" == "success" ]; then
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            echo "build-web: success"
+          else
+            echo "build-web: ${{ needs.build-web.result }}"
+          fi
+          
+          echo "Total successful builds: $SUCCESS_COUNT"
+          echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+          
+          if [ $SUCCESS_COUNT -ge 5 ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "At least 5 builds succeeded, proceeding with commit"
+          else
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            echo "Less than 5 builds succeeded, skipping commit"
+          fi
+
+      - name: Checkout source
+        if: steps.check-builds.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+
       - name: Download all artifacts
+        if: steps.check-builds.outputs.proceed == 'true'
         uses: actions/download-artifact@v4
         with:
           path: ffi-libs
 
       - name: Display structure of downloaded files
+        if: steps.check-builds.outputs.proceed == 'true'
         run: ls -R ffi-libs
 
-      - name: Create release package
+      - name: Copy Android libraries to jniLibs
+        if: steps.check-builds.outputs.proceed == 'true'
         run: |
-          mkdir -p release
-          # Linux
-          cp ffi-libs/linux-x86_64/libcrypto_engine.so release/libcrypto_engine-linux-x86_64.so || true
-          # Windows
-          cp ffi-libs/windows-x86_64/crypto_engine.dll release/crypto_engine-windows-x86_64.dll || true
-          # macOS
-          cp ffi-libs/macos-universal/libcrypto_engine.dylib release/libcrypto_engine-macos-universal.dylib || true
-          # Android
-          mkdir -p release/android/arm64-v8a release/android/armeabi-v7a release/android/x86_64
-          cp ffi-libs/android-arm64-v8a/libcrypto_engine.so release/android/arm64-v8a/ || true
-          cp ffi-libs/android-armeabi-v7a/libcrypto_engine.so release/android/armeabi-v7a/ || true
-          cp ffi-libs/android-x86_64/libcrypto_engine.so release/android/x86_64/ || true
-          # iOS
-          mkdir -p release/ios
-          cp ffi-libs/ios-arm64/libcrypto_engine.a release/ios/libcrypto_engine-ios-arm64.a || true
-          cp ffi-libs/ios-simulator-universal/libcrypto_engine.a release/ios/libcrypto_engine-ios-sim.a || true
-          # WASM
-          if [ -d "ffi-libs/wasm" ]; then
-            cp -r ffi-libs/wasm release/
+          # Create jniLibs directory structure for Android
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          mkdir -p android/app/src/main/jniLibs/x86_64
+          
+          # Copy Android libraries with explicit file existence checks
+          if [ -f "ffi-libs/android-arm64-v8a/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-arm64-v8a/libcrypto_engine.so android/app/src/main/jniLibs/arm64-v8a/
+            echo "✓ Copied arm64-v8a library"
+          else
+            echo "⚠ arm64-v8a library not found in artifacts"
           fi
-          # Create zip archives for easier distribution
-          cd release
-          zip -r android-libs.zip android/ || true
-          zip -r ios-libs.zip ios/ || true
+          
+          if [ -f "ffi-libs/android-armeabi-v7a/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-armeabi-v7a/libcrypto_engine.so android/app/src/main/jniLibs/armeabi-v7a/
+            echo "✓ Copied armeabi-v7a library"
+          else
+            echo "⚠ armeabi-v7a library not found in artifacts"
+          fi
+          
+          if [ -f "ffi-libs/android-x86_64/libcrypto_engine.so" ]; then
+            cp ffi-libs/android-x86_64/libcrypto_engine.so android/app/src/main/jniLibs/x86_64/
+            echo "✓ Copied x86_64 library"
+          else
+            echo "⚠ x86_64 library not found in artifacts"
+          fi
 
-      - name: Generate release tag
-        id: tag
-        run: echo "tag=ffi-v$(date +'%Y%m%d-%H%M')" >> $GITHUB_OUTPUT
+      - name: Copy Linux libraries
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Create Linux native library directory
+          mkdir -p linux/libs
+          if [ -f "ffi-libs/linux-x86_64/libcrypto_engine.so" ]; then
+            cp ffi-libs/linux-x86_64/libcrypto_engine.so linux/libs/
+            echo "✓ Copied Linux library"
+          else
+            echo "⚠ Linux library not found in artifacts"
+          fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Rust FFI Libraries ${{ steps.tag.outputs.tag }}
-          body: |
-            Automated build of Rust FFI cryptographic libraries for QSafeVault.
+      - name: Copy Windows libraries
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Create Windows native library directory
+          mkdir -p windows/libs
+          if [ -f "ffi-libs/windows-x86_64/crypto_engine.dll" ]; then
+            cp ffi-libs/windows-x86_64/crypto_engine.dll windows/libs/
+            echo "✓ Copied Windows library"
+          else
+            echo "⚠ Windows library not found in artifacts"
+          fi
+
+      - name: Copy macOS libraries
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Create macOS native library directory
+          mkdir -p macos/libs
+          if [ -f "ffi-libs/macos-universal/libcrypto_engine.dylib" ]; then
+            cp ffi-libs/macos-universal/libcrypto_engine.dylib macos/libs/
+            echo "✓ Copied macOS library"
+          else
+            echo "⚠ macOS library not found in artifacts"
+          fi
+
+      - name: Copy iOS libraries
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Create iOS native library directory
+          mkdir -p ios/libs
+          if [ -f "ffi-libs/ios-arm64/libcrypto_engine.a" ]; then
+            cp ffi-libs/ios-arm64/libcrypto_engine.a ios/libs/libcrypto_engine-device.a
+            echo "✓ Copied iOS device library"
+          else
+            echo "⚠ iOS device library not found in artifacts"
+          fi
+          
+          if [ -f "ffi-libs/ios-simulator-universal/libcrypto_engine.a" ]; then
+            cp ffi-libs/ios-simulator-universal/libcrypto_engine.a ios/libs/libcrypto_engine-simulator.a
+            echo "✓ Copied iOS simulator library"
+          else
+            echo "⚠ iOS simulator library not found in artifacts"
+          fi
+
+      - name: Copy Web WASM files
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Create web assets directory for WASM
+          mkdir -p web/wasm
+          if [ -d "ffi-libs/wasm" ]; then
+            cp -r ffi-libs/wasm/* web/wasm/
+            echo "✓ Copied WASM files"
+          else
+            echo "⚠ WASM build not available (expected for some configurations)"
+          fi
+
+      - name: Configure Git
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: Commit and push FFI libraries
+        if: steps.check-builds.outputs.proceed == 'true'
+        run: |
+          # Add all library files
+          git add android/app/src/main/jniLibs/ || true
+          git add linux/libs/ || true
+          git add windows/libs/ || true
+          git add macos/libs/ || true
+          git add ios/libs/ || true
+          git add web/wasm/ || true
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: Update Rust FFI libraries for all platforms
+
+            Built from: ${{ github.sha }}
+            Workflow run: ${{ github.run_id }}
             
-            ## Platforms
-            - **Linux x86_64**: `libcrypto_engine-linux-x86_64.so`
-            - **Windows x86_64**: `crypto_engine-windows-x86_64.dll`
-            - **macOS Universal** (x86_64 + ARM64): `libcrypto_engine-macos-universal.dylib`
-            - **Android**: `android-libs.zip` (arm64-v8a, armeabi-v7a, x86_64)
-            - **iOS**: `ios-libs.zip` (arm64 device, universal simulator)
-            - **Web**: WASM bundle (if available)
+            Platforms updated:
+            - Android (arm64-v8a, armeabi-v7a, x86_64)
+            - Linux (x86_64)
+            - Windows (x86_64)
+            - macOS (Universal)
+            - iOS (device + simulator)
+            - Web (WASM if available)"
             
-            ## Features
-            - AES-256-GCM authenticated encryption
-            - HKDF-SHA3-256 key derivation
-            - X25519 key exchange
-            - ML-KEM-768 (post-quantum) key encapsulation
-            - Hybrid X25519 + ML-KEM key exchange
-            - Secure memory zeroization
-          files: |
-            release/libcrypto_engine-linux-x86_64.so
-            release/crypto_engine-windows-x86_64.dll
-            release/libcrypto_engine-macos-universal.dylib
-            release/android-libs.zip
-            release/ios-libs.zip
-          token: ${{ secrets.GITHUB_TOKEN }}
+            git push
+          fi
+

@@ -6,23 +6,29 @@ This directory contains detailed documentation for QSafeVault components.
 
 | Document | Description |
 |----------|-------------|
+| [Getting Started](GETTING_STARTED.md) | App onboarding and setup guide |
+| [Security Architecture](SECURITY_ARCHITECTURE.md) | Algorithms, threat model, and security design |
 | [Crypto Engine](CRYPTO_ENGINE.md) | Rust FFI library for cryptographic operations |
 | [SoftHSM2 Installation](SOFTHSM_INSTALLATION.md) | Hardware Security Module setup for all platforms |
 
 ## Quick Links
 
-### Getting Started
-- [Main README](../README.md) - Overview and quick start
+### For Users
+- [Getting Started](GETTING_STARTED.md) - Installation and first-time setup
 - [Sync Guide](../SYNC_GUIDE.md) - Device-to-device synchronization
+- [Main README](../README.md) - Overview and quick start
 
-### Developer Resources
+### For Developers
 - [Crypto Engine API](CRYPTO_ENGINE.md#api-reference) - FFI function reference
+- [Crypto Architecture](../CRYPTO_ARCHITECTURE.md) - Technical architecture details
 - [Building from Source](CRYPTO_ENGINE.md#building) - Compilation instructions
 - [Platform Support](CRYPTO_ENGINE.md#platform-support) - Supported platforms matrix
 
 ### Security
-- [Security Model](../README.md#security-model) - Threat model and design
-- [SoftHSM2 Security](SOFTHSM_INSTALLATION.md#security-considerations) - HSM security notes
+- [Security Architecture](SECURITY_ARCHITECTURE.md) - Complete security documentation
+- [Algorithm Usage](SECURITY_ARCHITECTURE.md#cryptographic-algorithms-by-area) - Which algorithms are used where
+- [Threat Model](SECURITY_ARCHITECTURE.md#threat-model) - Security assumptions and mitigations
+- [Security Testing](SECURITY_ARCHITECTURE.md#security-testing) - Testing methodology
 
 ## Wiki Integration
 
@@ -31,6 +37,23 @@ These documents are designed to be easily migrated to a GitHub Wiki:
 1. Copy the markdown files to your wiki repository
 2. Update internal links to use wiki syntax
 3. The table of contents and cross-references should work automatically
+
+## Document Map
+
+```
+docs/
+├── README.md                 # This index file
+├── GETTING_STARTED.md        # User onboarding guide
+├── SECURITY_ARCHITECTURE.md  # Security design document
+├── CRYPTO_ENGINE.md          # Rust FFI documentation
+└── SOFTHSM_INSTALLATION.md   # HSM setup guide
+
+Root/
+├── README.md                 # Main project readme
+├── SYNC_GUIDE.md            # Sync documentation
+├── CRYPTO_ARCHITECTURE.md   # Technical architecture
+└── IMPLEMENTATION_SUMMARY.md # Implementation details
+```
 
 ## Contributing
 
