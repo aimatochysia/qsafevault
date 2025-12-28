@@ -531,11 +531,14 @@ RUN softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin
 
 Additional documentation is available in the `docs/` directory:
 
-- [Crypto Engine Guide](docs/CRYPTO_ENGINE.md) - Rust FFI library for cryptographic operations
-- [SoftHSM2 Installation](docs/SOFTHSM_INSTALLATION.md) - Hardware Security Module setup guide
-- [Security Architecture](docs/SECURITY_ARCHITECTURE.md) - Algorithms and security design
 - [Getting Started](docs/GETTING_STARTED.md) - App onboarding guide
-- [Sync Guide](SYNC_GUIDE.md) - Device-to-device synchronization
+- [Security Architecture](docs/SECURITY_ARCHITECTURE.md) - Algorithms and security design
+- [Crypto Engine Guide](docs/CRYPTO_ENGINE.md) - Rust FFI library for cryptographic operations
+- [Crypto Architecture](docs/CRYPTO_ARCHITECTURE.md) - Technical architecture details
+- [SoftHSM2 Installation](docs/SOFTHSM_INSTALLATION.md) - Hardware Security Module setup guide
+- [Sync Guide](docs/SYNC_GUIDE.md) - Device-to-device synchronization
+- [Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md) - Implementation details
+- [Testing Guide](docs/TESTING_GUIDE.md) - How to run tests
 
 ---
 

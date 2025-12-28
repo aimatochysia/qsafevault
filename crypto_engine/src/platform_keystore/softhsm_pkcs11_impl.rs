@@ -5,6 +5,7 @@
 // Keys are stored securely within the HSM token and never extracted
 
 #![cfg(not(target_os = "android"))]
+#![allow(static_mut_refs)]
 
 use std::path::PathBuf;
 use std::sync::Once;
@@ -189,7 +190,7 @@ pub fn seal_with_softhsm(
 }
 
 /// Unwraps a master key using PKCS#11 SoftHSM
-/// The wrapping key is accessed within the HSM, never extracted
+#[allow(dead_code)]
 pub fn unseal_with_softhsm(
     key_id: &str,
     _wrapped_key: &[u8],
@@ -278,6 +279,7 @@ pub fn unseal_with_softhsm(
 }
 
 /// Deletes a key from SoftHSM
+#[allow(dead_code)]
 pub fn delete_from_softhsm(key_id: &str, pin: Option<&str>) -> Result<(), String> {
     log::info!("SoftHSM: Deleting key '{}'", key_id);
     

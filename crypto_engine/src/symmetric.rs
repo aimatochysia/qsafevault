@@ -28,7 +28,7 @@ impl SymmetricKey {
         Self { key: bytes }
     }
 
-    /// Get key bytes
+    #[allow(dead_code)]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.key
     }
@@ -154,7 +154,7 @@ impl EncryptedData {
 }
 
 /// Simple AES-GCM encryption for key wrapping (used by TPM/StrongBox implementations)
-/// Returns: (ciphertext_with_tag, nonce)
+#[allow(dead_code)]
 pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     if key.len() != 32 {
         return Err("Key must be 32 bytes".to_string());
@@ -175,6 +175,7 @@ pub fn aes_gcm_encrypt(key: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>
 }
 
 /// Simple AES-GCM decryption for key unwrapping (used by TPM/StrongBox implementations)
+#[allow(dead_code)]
 pub fn aes_gcm_decrypt(key: &[u8], ciphertext_with_tag: &[u8], nonce: &[u8]) -> Result<Vec<u8>, String> {
     if key.len() != 32 {
         return Err("Key must be 32 bytes".to_string());
