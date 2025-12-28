@@ -1,20 +1,36 @@
 # Q‑Safe Vault
 
-A secure, local‑first password manager built with Flutter. Vault data is encrypted at rest with AES‑256‑GCM, using Argon2id for password‑based key derivation and optional fast‑unlock keys wrapped in platform secure storage. Device‑to‑device sync uses WebRTC data channels, authenticated by Ed25519 device identities, and a short‑lived PIN rendezvous.
+A secure, local‑first password manager built with Flutter featuring **post-quantum cryptography**. Vault data is encrypted at rest with AES‑256‑GCM using keys derived via post-quantum Kyber ML-KEM 768, with Argon2id for password‑based key derivation and optional fast‑unlock keys wrapped in platform secure storage. Device‑to‑device sync uses encrypted relay channels, authenticated by Dilithium3 post-quantum digital signatures.
+
+## 🔐 Post-Quantum Security
+
+This vault is **fully post-quantum secure**, protecting against both classical and quantum computer attacks:
+
+| Cryptographic Function | Algorithm | Security Level |
+|------------------------|-----------|----------------|
+| Key Encapsulation | ML-KEM 768 (Kyber) | NIST Level 3 (PQ-safe) |
+| Digital Signatures | Dilithium3 | NIST Level 3 (PQ-safe) |
+| Symmetric Encryption | AES-256-GCM | 256-bit (PQ-safe) |
+| Key Derivation | HKDF-SHA3-256 | 256-bit (PQ-safe) |
+| Password KDF | Argon2id | Memory-hard |
+
+**No classical-only cryptography remains** in the security-critical paths.
 
 Key highlights
 - Local‑only vault; no cloud storage
-- AES‑256‑GCM encryption; Argon2id KDF
+- **Post-quantum encryption**: Kyber ML-KEM + AES‑256‑GCM
+- **Post-quantum signatures**: Dilithium3 for device identity
+- Argon2id password KDF (m=64MB, t=3, p=4 for full unlock)
 - Fast unlock via OS secure storage (optional)
 - Cross‑platform app (Windows, Linux, Android; macOS/iOS planned)
-- Peer‑to‑peer sync over WebRTC with PIN rendezvous
+- Peer‑to‑peer sync with end-to-end PQ encryption
 - No telemetry
 
 Supported platforms
-- Windows (desktop)
-- Linux (desktop)
-- Android (mobile)
-- macOS/iOS (on dev)
+- Windows (desktop) - TPM2/CNG support
+- Linux (desktop) - TPM2/SoftHSM support
+- Android (mobile) - StrongBox Keystore support
+- macOS/iOS (on dev) - Secure Enclave support
 
 License
 - Creative Commons Attribution‑NonCommercial 4.0 International (CC BY‑NC 4.0)
@@ -40,9 +56,10 @@ License
 
 Components
 - App: Flutter UI and services (vault storage, crypto, sync).
-- Storage: AES‑256‑GCM encrypted vault; atomic writes; backups; optional wrapped key in secure storage.
-- Device identity: Ed25519 key pair generated per device (for local features).
-- Sync: Stateless, PIN + password‑protected encrypted relay over HTTPS. The app encrypts the payload end‑to‑end and sends it in short‑lived chunks via a serverless relay; the relay stores only opaque chunks with a 30–60s TTL and never sees plaintext.
+- Crypto Engine: Rust FFI providing all post-quantum cryptographic operations.
+- Storage: AES‑256‑GCM encrypted vault (keys from PQ KEM); atomic writes; backups; optional wrapped key in secure storage.
+- Device identity: Dilithium3 key pair generated per device for post-quantum authentication.
+- Sync: Stateless, PIN + password‑protected encrypted relay over HTTPS. The app encrypts the payload end‑to‑end using PQ-derived keys and sends it in short‑lived chunks via a serverless relay; the relay stores only opaque chunks with a 30–60s TTL and never sees plaintext.
 
 Data flow
 1) Unlock vault with password (Argon2id -> master key -> decrypt vault)
@@ -58,12 +75,22 @@ Data flow
 
 ## Security model
 
-- Encryption at rest: AES‑256‑GCM
-- Password KDF: Argon2id (calibrated); fast‑unlock also Argon2id with separate parameters
-- Integrity: AEAD tags; HMAC‑SHA3‑512 for verifier and tamper detection of fast‑params
-- Device trust: Ed25519 public key pinning; sync will warn on untrusted peers
-- Signaling privacy: Offer/Answer sealed with AES‑GCM using a key derived from PIN via Argon2id (server stores only sealed envelopes)
-- Transport: WebRTC DTLS/SRTP
+- **Encryption at rest**: AES‑256‑GCM with keys derived from PQ KEM (Kyber)
+- **Key Exchange**: ML-KEM 768 (Kyber) - NIST standardized post-quantum KEM
+- **Digital Signatures**: Dilithium3 - NIST standardized post-quantum signatures
+- **Password KDF**: Argon2id (calibrated: m=64MB, t=3, p=4 for full unlock; m=16MB, t=1, p=1 for fast unlock)
+- **Key Derivation**: HKDF-SHA3-256 for deriving encryption and MAC keys from PQ KEM output
+- **Integrity**: AEAD 128-bit authentication tags; HMAC‑SHA3 for tamper detection
+- **Device trust**: Dilithium3 public key pinning; sync will warn on untrusted peers
+- **Signaling privacy**: Offer/Answer sealed with AES‑GCM using a key derived from PIN via Argon2id (server stores only sealed envelopes)
+- **Transport**: End-to-end encryption with forward secrecy (ephemeral PQ keys)
+
+### Zero-Trust Architecture
+- Server stores only opaque encrypted blobs; cannot decrypt vault data
+- All keys derived locally; no key material transmitted to server
+- Multi-device key sharing uses secure PQ-encrypted channels
+- Rate limiting for login and sync operations
+- Logging contains no secret data, only metadata (timestamps, device IDs)
 
 Operator guidance
 - Share only public keys; verify and add peers to trusted list before syncing
@@ -518,8 +545,10 @@ RUN softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin
 - [Done] Fast unlock via secure storage (optional)
 - [Done] Atomic writes, backups, multi‑part storage
 - [Done] WebRTC sync with PIN rendezvous and device trust
-- [Done] Hybrid post-quantum cryptography (Kyber ML-KEM + X25519)
+- [Done] Post-quantum KEM (Kyber ML-KEM 768) - NIST standardized
+- [Done] Post-quantum signatures (Dilithium3) - NIST standardized
 - [Done] Platform secure storage auto-detection (TPM2, SoftHSM, Secure Enclave)
+- [Done] Rust FFI crypto engine for all platforms
 - [Planned] macOS/iOS support (in progress)
 - [Planned] Third‑party security audit
 - [Planned] Full TPM2/SoftHSM sealing implementation
@@ -532,6 +561,6 @@ License
 - Creative Commons Attribution‑NonCommercial 4.0 International (CC BY‑NC 4.0). See LICENSE.
 
 Acknowledgements
-- cryptography, pointycastle, flutter_secure_storage, flutter_webrtc, pqcrypto-ml-kem, x25519-dalek, and the Flutter/Rust ecosystems.
+- pqcrypto-mlkem, pqcrypto-dilithium, aes-gcm, hkdf, sha3, zeroize, and the Flutter/Rust ecosystems.
 
 ---

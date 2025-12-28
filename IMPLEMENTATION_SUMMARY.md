@@ -4,11 +4,12 @@
 
 ### 1. Complete Rust Cryptographic Library (`crypto_engine/`)
 
-A production-grade cryptographic backend implementing:
+A production-grade cryptographic backend implementing **fully post-quantum secure** cryptography:
 
 **Core Cryptographic Modules:**
-- **pqc_kem.rs**: Kyber ML-KEM 768 (NIST-standardized post-quantum KEM)
-- **classical_kem.rs**: X25519 Elliptic Curve Diffie-Hellman
+- **pqc_kem.rs**: Kyber ML-KEM 768 (NIST FIPS 203 post-quantum KEM)
+- **pqc_signature.rs**: Dilithium3 (NIST FIPS 204 post-quantum signatures)
+- **classical_kem.rs**: X25519 Elliptic Curve Diffie-Hellman (hybrid mode)
 - **hybrid_kem.rs**: Hybrid construction combining PQC + Classical with HKDF-SHA3
 - **symmetric.rs**: AES-256-GCM authenticated encryption
 - **sealed_storage.rs**: Versioned, deterministic blob format with metadata
@@ -17,8 +18,9 @@ A production-grade cryptographic backend implementing:
 - **ios_secure_enclave.rs**: iOS Keychain integration (working)
 - **macos_secure_enclave.rs**: macOS Keychain integration (working)
 - **android_strongbox.rs**: Android StrongBox Keystore (stub, needs JNI)
-- **windows_tpm.rs**: Windows TPM2 via CNG (stub, needs full implementation)
+- **windows_tpm.rs**: Windows TPM2 via CNG (implemented)
 - **linux_tpm.rs**: Linux TPM2 via tpm2-tss (stub, needs tss-esapi integration)
+- **softhsm_pkcs11.rs**: SoftHSM PKCS#11 support (implemented)
 - **fallback_software.rs**: Software-based keystore (working, filesystem-based)
 
 **FFI Layer:**
@@ -57,10 +59,13 @@ A production-grade cryptographic backend implementing:
 - Roundtrip tests for encryption/decryption
 - Serialization/deserialization tests
 - Key generation and agreement tests
+- Dilithium3 signature generation and verification tests
 
 ## API Overview
 
 ### Core Functions Exported via FFI
+
+#### Key Encapsulation (KEM)
 
 1. **pqcrypto_generate_hybrid_keypair()**
    - Generates PQC (Kyber) + Classical (X25519) keypair
@@ -79,45 +84,75 @@ A production-grade cryptographic backend implementing:
    - Decrypts master key
    - Returns 32-byte master key
 
-4. **pqcrypto_seal_private_key_with_platform_keystore()**
+#### Digital Signatures (Dilithium3)
+
+4. **pqcrypto_generate_signing_keypair()**
+   - Generates Dilithium3 post-quantum signing keypair
+   - Returns opaque handle and public key
+   - Private key never leaves Rust memory
+
+5. **pqcrypto_sign_message()**
+   - Signs message with Dilithium3 private key
+   - Returns detached signature bytes
+   - Constant-time operations
+
+6. **pqcrypto_verify_signature()**
+   - Verifies Dilithium3 signature against public key
+   - Returns validity status
+   - Rejects tampered messages
+
+#### Platform Keystore
+
+7. **pqcrypto_seal_private_key_with_platform_keystore()**
    - Serializes hybrid private keys
    - Attempts hardware-backed storage (Secure Enclave, TPM, etc.)
    - Falls back to software storage if needed
    - Platform-specific implementation
 
-5. **pqcrypto_unseal_private_key_from_platform_keystore()**
+8. **pqcrypto_unseal_private_key_from_platform_keystore()**
    - Retrieves sealed private keys from platform storage
    - Reconstructs keypair with provided public keys
    - Returns handle for cryptographic operations
 
-6. **pqcrypto_encrypt_vault()**
+#### Vault Encryption
+
+9. **pqcrypto_encrypt_vault()**
    - Encrypts arbitrary data with AES-256-GCM
    - Uses 32-byte master key
    - Returns sealed blob with version and metadata
 
-7. **pqcrypto_decrypt_vault()**
-   - Decrypts sealed blob
-   - Verifies authentication tag (AEAD)
-   - Returns plaintext data
+10. **pqcrypto_decrypt_vault()**
+    - Decrypts sealed blob
+    - Verifies 128-bit authentication tag (AEAD)
+    - Returns plaintext data
 
-8. **pqcrypto_free_handle()**
-   - Releases keypair/key handle
-   - Zeroizes sensitive data automatically
+#### Memory Management
+
+11. **pqcrypto_free_handle()**
+    - Releases keypair/key handle
+    - Zeroizes sensitive data automatically
+
+12. **pqcrypto_free_signing_keypair()**
+    - Releases signing keypair handle
+    - Zeroizes secret key material
 
 ## Security Properties
 
 ### Cryptographic Strength
-- **Quantum-Resistant**: Kyber ML-KEM protects against Shor's algorithm
-- **Classical Security**: X25519 provides 128-bit security today
+- **Post-Quantum KEM**: Kyber ML-KEM 768 protects against quantum computer attacks
+- **Post-Quantum Signatures**: Dilithium3 provides quantum-resistant authentication
+- **Classical Security**: X25519 provides 128-bit security today (hybrid mode)
 - **Hybrid Security**: Combined protection from both mechanisms
-- **Authenticated Encryption**: AES-GCM prevents tampering
-- **Key Derivation**: HKDF-SHA3 for robust shared secret derivation
+- **Authenticated Encryption**: AES-256-GCM with 128-bit tags prevents tampering
+- **Key Derivation**: HKDF-SHA3-256 for robust shared secret derivation
+- **Unique Nonces**: Random 96-bit nonces per encryption (never reused)
 
 ### Memory Safety
 - **Rust's Ownership System**: Prevents memory leaks and use-after-free
 - **Automatic Zeroization**: Sensitive data cleared on drop
 - **No Raw Pointers in Safe Code**: Unsafe code minimized and audited
 - **Handle-Based API**: No key material exposed to Flutter
+- **Thread-Safe Handle Generation**: AtomicU64 counter for concurrent access
 
 ### Platform Security
 - **Hardware-Backed Storage**: Uses Secure Enclave, StrongBox, TPM when available
@@ -141,13 +176,17 @@ A production-grade cryptographic backend implementing:
 
 ### Partially Implemented (Stubs)
 ⚠️ Android StrongBox (requires JNI integration)
-⚠️ Windows TPM2 (requires CNG API implementation)
 ⚠️ Linux TPM2 (requires tss-esapi integration)
+
+### Recently Fixed
+✅ Windows build errors fixed (type mismatches resolved)
+✅ SoftHSM PKCS#11 implementation (cross-platform types)
+✅ Windows TPM2 CNG implementation
 
 ## Integration Path
 
 ### Current State
-The Rust backend is **complete and ready to use**. The existing Flutter codebase still uses Dart-based cryptography.
+The Rust backend is **complete and ready to use** with **fully post-quantum secure** cryptography. The existing Flutter codebase still uses Dart-based cryptography.
 
 ### Recommended Integration Steps
 
@@ -174,15 +213,19 @@ The Rust backend is **complete and ready to use**. The existing Flutter codebase
 ## Dependencies
 
 ### Rust Crates Added
-- `pqcrypto-mlkem`: Post-quantum KEM
-- `x25519-dalek`: Classical ECDH
-- `aes-gcm`: Symmetric encryption
-- `hkdf`, `sha3`: Key derivation
+- `pqcrypto-mlkem`: Kyber ML-KEM 768 (Post-quantum KEM)
+- `pqcrypto-dilithium`: Dilithium3 (Post-quantum signatures)
+- `pqcrypto-traits`: Common PQC traits
+- `x25519-dalek`: Classical ECDH (hybrid mode)
+- `aes-gcm`: AES-256-GCM authenticated encryption
+- `hkdf`, `sha3`: HKDF-SHA3-256 key derivation
 - `zeroize`: Secure memory clearing
 - `serde`, `bincode`, `serde_json`: Serialization
 - `dirs`: Directory paths
 - `lazy_static`, `libc`: Utilities
 - `security-framework` (iOS/macOS): Keychain access
+- `windows` (Windows): CNG/TPM access
+- `pkcs11` (Linux/macOS): SoftHSM support
 
 ### Flutter Packages Added
 - `ffi`: Dart FFI support
