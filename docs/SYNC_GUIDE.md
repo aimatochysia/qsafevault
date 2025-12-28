@@ -1,10 +1,12 @@
 # Device Sync Guide
 
-Audience
+## Audience
+
 - End users performing device-to-device sync.
 - Operators running the signaling server.
 
-What this covers
+## What this covers
+
 - Invite code pairing flow, P2P sync, prerequisites, expected logs, and troubleshooting.
 
 ## Overview
