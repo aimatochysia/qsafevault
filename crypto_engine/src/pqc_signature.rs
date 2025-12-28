@@ -4,16 +4,10 @@ use pqcrypto_dilithium::dilithium3;
 use pqcrypto_traits::sign::{PublicKey as PublicKeyTrait, SecretKey as SecretKeyTrait, SignedMessage, DetachedSignature};
 
 /// PQC signature keypair (Dilithium3 - NIST Level 3 security)
+/// Note: The pqcrypto-dilithium library handles secure memory management internally
 pub struct PqcSigningKeypair {
     pub public_key: dilithium3::PublicKey,
     pub secret_key: dilithium3::SecretKey,
-}
-
-impl Drop for PqcSigningKeypair {
-    fn drop(&mut self) {
-        // Zeroize secret key memory
-        // Note: pqcrypto types should handle this internally
-    }
 }
 
 /// PQC detached signature

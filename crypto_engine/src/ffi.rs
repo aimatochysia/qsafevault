@@ -6,6 +6,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::slice;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::hybrid_kem::{HybridKeypair, HybridCiphertext, encapsulate as hybrid_encapsulate};
 use crate::symmetric::{SymmetricKey, EncryptedData, encrypt, decrypt};
@@ -24,14 +25,11 @@ lazy_static::lazy_static! {
     static ref KEY_HANDLES: Mutex<HashMap<u64, SymmetricKey>> = Mutex::new(HashMap::new());
 }
 
-static mut NEXT_HANDLE: u64 = 1;
+// Thread-safe handle counter
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 fn next_handle() -> u64 {
-    unsafe {
-        let handle = NEXT_HANDLE;
-        NEXT_HANDLE += 1;
-        handle
-    }
+    NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
 }
 
 /// Generate a new hybrid keypair (PQC + Classical)
