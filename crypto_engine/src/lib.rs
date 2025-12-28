@@ -13,9 +13,12 @@ mod ffi;
 pub use ffi::*;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod security_tests;
 
+pub use ffi::*;
+
+#[cfg(test)]
+mod tests {
     #[test]
     fn test_integration() {
         // Basic integration test
