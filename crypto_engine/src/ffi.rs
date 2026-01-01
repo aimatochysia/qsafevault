@@ -304,8 +304,13 @@ pub extern "C" fn pqcrypto_verify_server_edition(
 // Edition-Aware Helper Functions
 // =============================================================================
 
-/// Check edition and enforce PQ algorithm policy before operations
-fn require_pq_algorithms() -> Result<(), String> {
+/// Check edition and enforce ML-KEM 768 algorithm policy before hybrid operations
+/// This verifies that the ML-KEM 768 (Kyber) post-quantum KEM algorithm is permitted.
+/// Used by hybrid encryption/decryption and keypair generation functions.
+fn require_hybrid_pq_algorithms() -> Result<(), String> {
+    // Hybrid operations use ML-KEM 768 + X25519
+    // Both are non-FIPS, but we check ML-KEM as the primary PQ algorithm
+    // X25519 would also fail in Enterprise mode via the same policy
     match enforce_algorithm(Algorithm::MlKem768) {
         Ok(()) => Ok(()),
         Err(e) => Err(e.to_string()),
@@ -331,7 +336,7 @@ pub extern "C" fn pqcrypto_generate_hybrid_keypair(
     }
 
     // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_pq_algorithms() {
+    if let Err(e) = require_hybrid_pq_algorithms() {
         if !error_msg_out.is_null() {
             if let Ok(c_str) = CString::new(e) {
                 unsafe { *error_msg_out = c_str.into_raw(); }
@@ -408,7 +413,7 @@ pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
     }
 
     // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_pq_algorithms() {
+    if let Err(e) = require_hybrid_pq_algorithms() {
         if !error_msg_out.is_null() {
             if let Ok(c_str) = CString::new(e) {
                 unsafe { *error_msg_out = c_str.into_raw(); }
@@ -490,7 +495,7 @@ pub extern "C" fn pqcrypto_hybrid_decrypt_master_key(
     }
 
     // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_pq_algorithms() {
+    if let Err(e) = require_hybrid_pq_algorithms() {
         if !error_msg_out.is_null() {
             if let Ok(c_str) = CString::new(e) {
                 unsafe { *error_msg_out = c_str.into_raw(); }

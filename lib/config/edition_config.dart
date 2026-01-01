@@ -178,6 +178,12 @@ class EditionStatusCodes {
         statusCode == hsmRequired ||
         statusCode == softHsmProhibited;
   }
+
+  /// Check if status code indicates a fatal initialization error
+  static bool isInitializationError(int statusCode) {
+    return statusCode == editionNotInitialized ||
+        statusCode == editionAlreadyInitialized;
+  }
 }
 
 /// Exception for Edition-related errors
@@ -192,5 +198,27 @@ class EditionException implements Exception {
   String toString() => 'EditionException: $message (code: $statusCode)';
 
   /// Whether this is a fatal error that should stop the application
-  bool get isFatal => GlobalEdition.configOrDefault.isEnterprise;
+  /// Fatal errors include:
+  /// - All Enterprise mode restrictions (FIPS violations, PQ disabled, HSM required)
+  /// - Initialization errors (edition not initialized, already initialized)
+  /// - Server edition mismatches
+  bool get isFatal {
+    // Initialization errors are always fatal
+    if (EditionStatusCodes.isInitializationError(statusCode)) {
+      return true;
+    }
+    
+    // Server edition mismatch is always fatal for Enterprise clients
+    if (statusCode == EditionStatusCodes.serverEditionMismatch) {
+      return GlobalEdition.configOrDefault.isEnterprise;
+    }
+    
+    // Enterprise restrictions are fatal in Enterprise mode
+    if (EditionStatusCodes.isEnterpriseRestriction(statusCode)) {
+      return GlobalEdition.configOrDefault.isEnterprise;
+    }
+    
+    // General errors are not fatal
+    return false;
+  }
 }

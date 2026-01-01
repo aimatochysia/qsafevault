@@ -292,10 +292,16 @@ impl KeyProvider for EnterpriseKeyProvider {
         
         log::info!("Enterprise: Generating root key in HSM: {}", key_id);
         
-        // In a real implementation, this would call the HSM API
-        // For now, return an error indicating HSM integration is required
+        // ENTERPRISE HSM INTEGRATION PLACEHOLDER
+        // This is a placeholder for future HSM integration.
+        // A production implementation would:
+        // 1. Connect to the HSM via PKCS#11 or vendor-specific API
+        // 2. Generate the key inside the HSM (key never leaves HSM)
+        // 3. Return a reference/handle to the key, not the key material
+        //
+        // Current behavior: Returns error indicating HSM integration required
         Err(KeyProviderError::HsmOperationFailed(format!(
-            "HSM key generation not yet implemented for connection: {}",
+            "HSM key generation not yet implemented. Enterprise mode requires external HSM integration. Connection: {}",
             hsm.connection
         )))
     }
@@ -305,9 +311,10 @@ impl KeyProvider for EnterpriseKeyProvider {
         
         log::info!("Enterprise: Storing root key in HSM: {}", key_id);
         
-        // In a real implementation, this would call the HSM API
+        // ENTERPRISE HSM INTEGRATION PLACEHOLDER
+        // See generate_root_key for implementation notes
         Err(KeyProviderError::HsmOperationFailed(format!(
-            "HSM key storage not yet implemented for connection: {}",
+            "HSM key storage not yet implemented. Enterprise mode requires external HSM integration. Connection: {}",
             hsm.connection
         )))
     }
@@ -317,9 +324,10 @@ impl KeyProvider for EnterpriseKeyProvider {
         
         log::info!("Enterprise: Retrieving root key from HSM: {}", key_id);
         
-        // In a real implementation, this would call the HSM API
+        // ENTERPRISE HSM INTEGRATION PLACEHOLDER
+        // See generate_root_key for implementation notes
         Err(KeyProviderError::HsmOperationFailed(format!(
-            "HSM key retrieval not yet implemented for connection: {}",
+            "HSM key retrieval not yet implemented. Enterprise mode requires external HSM integration. Connection: {}",
             hsm.connection
         )))
     }
@@ -329,9 +337,10 @@ impl KeyProvider for EnterpriseKeyProvider {
         
         log::info!("Enterprise: Deleting root key from HSM: {}", key_id);
         
-        // In a real implementation, this would call the HSM API
+        // ENTERPRISE HSM INTEGRATION PLACEHOLDER
+        // See generate_root_key for implementation notes
         Err(KeyProviderError::HsmOperationFailed(format!(
-            "HSM key deletion not yet implemented for connection: {}",
+            "HSM key deletion not yet implemented. Enterprise mode requires external HSM integration. Connection: {}",
             hsm.connection
         )))
     }
@@ -346,13 +355,23 @@ impl KeyProvider for EnterpriseKeyProvider {
     }
 
     fn backend_type(&self) -> BackendType {
-        // Enterprise always uses external HSM
-        // We represent this as TPM for now (could add HSM variant)
+        // Enterprise uses external HSM
+        // NOTE: BackendType::TPM is used to represent external HSM because:
+        // 1. Both are hardware-backed security modules
+        // 2. The SealedBlob format doesn't need to distinguish HSM from TPM
+        // 3. Adding a new BackendType::ExternalHSM variant would require 
+        //    updating serialization and breaking backward compatibility
+        //
+        // Future: Consider adding BackendType::ExternalHSM when implementing
+        // full HSM integration
         BackendType::TPM
     }
 }
 
 /// Create a key provider for the current edition
+/// 
+/// NOTE: Enterprise mode key provider creation requires explicit HSM configuration.
+/// Use create_key_provider_with_config() for Enterprise deployments.
 pub fn create_key_provider() -> KeyProviderResult<Box<dyn KeyProvider>> {
     let edition = get_edition()?;
     

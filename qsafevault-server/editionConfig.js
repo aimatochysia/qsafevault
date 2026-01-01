@@ -56,12 +56,32 @@ class EditionConfig {
       );
     }
     
-    // Enterprise should not use default/managed deployment
-    if (process.env.VERCEL || process.env.NETLIFY || process.env.HEROKU) {
-      console.warn(
-        'WARNING: Enterprise mode detected on managed platform. ' +
-        'Enterprise mode is designed for self-hosted deployments.'
-      );
+    // Enterprise MUST NOT use managed/public deployment platforms
+    // These platforms are designed for public hosting, not enterprise self-hosted deployments
+    const managedPlatforms = [];
+    if (process.env.VERCEL) managedPlatforms.push('Vercel');
+    if (process.env.NETLIFY) managedPlatforms.push('Netlify');
+    if (process.env.HEROKU) managedPlatforms.push('Heroku');
+    if (process.env.AWS_LAMBDA_FUNCTION_NAME) managedPlatforms.push('AWS Lambda');
+    if (process.env.GOOGLE_CLOUD_PROJECT) managedPlatforms.push('Google Cloud Functions');
+    if (process.env.AZURE_FUNCTIONS_ENVIRONMENT) managedPlatforms.push('Azure Functions');
+    
+    if (managedPlatforms.length > 0) {
+      // Check if self-hosted override is set
+      if (process.env.QSAFEVAULT_ENTERPRISE_ALLOW_MANAGED === 'true') {
+        console.warn(
+          'WARNING: Enterprise mode on managed platform explicitly allowed. ' +
+          `Platforms detected: ${managedPlatforms.join(', ')}. ` +
+          'Ensure you understand the security implications.'
+        );
+      } else {
+        errors.push(
+          `ENTERPRISE MODE: Self-hosted deployment required. ` +
+          `Managed platform(s) detected: ${managedPlatforms.join(', ')}. ` +
+          'Enterprise mode is designed for organization-controlled infrastructure. ' +
+          'To override (not recommended), set QSAFEVAULT_ENTERPRISE_ALLOW_MANAGED=true.'
+        );
+      }
     }
     
     if (errors.length > 0) {
