@@ -1,21 +1,30 @@
 import 'package:flutter/material.dart';
 import '/pages/landing_page.dart';
-import '/services/crypto_service.dart';
+import '/services/fips_crypto_service.dart';
 import '/services/storage_service.dart';
 import 'platforms/windows.dart';
 import 'dart:io';
 import 'package:qsafevault/services/theme_service.dart';
+import 'package:qsafevault/config/edition_config.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize edition from build-time configuration
+  // Use: flutter run --dart-define=QSAFEVAULT_EDITION=enterprise
+  final editionConfig = EditionConfig.fromEnvironment();
+  GlobalEdition.initialize(editionConfig);
+  debugPrint('QSafeVault starting in ${editionConfig.editionName} mode');
+  
   await ThemeService.instance.init();
-  final cryptoService = CryptoService();
+  final cryptoService = FipsCryptoService();
   final storageService = StorageService(cryptoService);
   setupWindowsWindow();
   runApp(MyApp(storage: storageService, cryptoService: cryptoService));
 }
 class MyApp extends StatelessWidget {
   final StorageService storage;
-  final CryptoService cryptoService;
+  final FipsCryptoService cryptoService;
   const MyApp({Key? key, required this.storage, required this.cryptoService})
       : super(key: key);
   @override

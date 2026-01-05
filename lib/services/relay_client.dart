@@ -1,27 +1,24 @@
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
-import 'package:cryptography/cryptography.dart';
 import 'package:http/http.dart' as http;
 import '../config/sync_config.dart';
-import 'crypto_service.dart';
-import 'package:crypto/crypto.dart' as crypto;
+import 'fips_crypto_service.dart';
 import 'app_logger.dart';
 
 class RelayClient {
   final SyncConfig config;
   final http.Client _http;
-  final CryptoService _crypto;
+  final FipsCryptoService _crypto;
 
   late final String _baseNoSlash;
 
   RelayClient({
     SyncConfig? config,
     http.Client? httpClient,
-    CryptoService? crypto,
+    FipsCryptoService? crypto,
   })  : config = config ?? SyncConfig.defaults(),
         _http = httpClient ?? http.Client(),
-        _crypto = crypto ?? CryptoService() {
+        _crypto = crypto ?? FipsCryptoService() {
     final raw = this.config.baseUrl.trim();
     _baseNoSlash = raw.replaceAll(RegExp(r'/+$'), '');
   }
@@ -33,48 +30,41 @@ class RelayClient {
     return uri.replace(queryParameters: query);
   }
 
-  Future<SecretKey> deriveTransferKey({required String pin, required String password}) async {
+  /// Derive transfer key using PBKDF2-HMAC-SHA256 (FIPS-compliant)
+  Uint8List deriveTransferKey({required String pin, required String password}) {
     final tag = 'qsv-relay-v1|$pin|$password';
-    final digest = await Sha256().hash(utf8.encode(tag));
-    final salt = digest.bytes.sublist(0, 16);
+    final digest = _crypto.sha256String(tag);
+    final salt = Uint8List.fromList(digest.sublist(0, 16));
     return _crypto.deriveKeyFromPassword(
       password: password,
       salt: salt,
-      kdf: 'argon2id',
-      iterations: 2,
-      memoryKb: 65536,
-      parallelism: 1,
+      iterations: 100000,  // FIPS-compliant iteration count
     );
   }
 
   String passwordHash({required String pin, required String password}) {
     final tag = 'qsv-relay-v1-hash|$pin|$password';
-    final digest = sha256(utf8.encode(tag));
+    final digest = _crypto.sha256String(tag);
     return base64Encode(digest);
   }
 
-  Future<Uint8List> encryptPayload(SecretKey key, String plaintext) async {
-    final aes = AesGcm.with256bits();
-    final nonce = _random(12);
+  /// Encrypt payload using AES-256-GCM (FIPS 197)
+  Uint8List encryptPayload(Uint8List key, String plaintext) {
     final clear = Uint8List.fromList(utf8.encode(plaintext));
-    final sb = await aes.encrypt(clear, secretKey: key, nonce: nonce);
+    final encrypted = _crypto.encrypt(key: key, plaintext: clear);
+    // Format: nonce (12) || ciphertext || tag (16)
     final env = {
       'v': 1,
-      'nonceB64': base64Encode(sb.nonce),
-      'ctB64': base64Encode(Uint8List.fromList(sb.cipherText + sb.mac.bytes)),
+      'ctB64': base64Encode(encrypted),
     };
     return Uint8List.fromList(utf8.encode(jsonEncode(env)));
   }
 
-  Future<String> decryptPayload(SecretKey key, Uint8List envelopeBytes) async {
+  /// Decrypt payload using AES-256-GCM (FIPS 197)
+  String decryptPayload(Uint8List key, Uint8List envelopeBytes) {
     final obj = jsonDecode(utf8.decode(envelopeBytes)) as Map<String, dynamic>;
-    final nonce = base64Decode(obj['nonceB64'] as String);
     final ctAll = base64Decode(obj['ctB64'] as String);
-    final macLen = 16;
-    final cipherText = ctAll.sublist(0, ctAll.length - macLen);
-    final mac = Mac(ctAll.sublist(ctAll.length - macLen));
-    final aes = AesGcm.with256bits();
-    final clear = await aes.decrypt(SecretBox(cipherText, nonce: nonce, mac: mac), secretKey: key);
+    final clear = _crypto.decrypt(key: key, ciphertext: ctAll);
     return utf8.decode(clear);
   }
 
@@ -153,11 +143,4 @@ class RelayClient {
     }
     return (status: status, index: null, total: null, data: null);
   }
-
-  Uint8List _random(int n) {
-    final r = Random.secure();
-    return Uint8List.fromList(List<int>.generate(n, (_) => r.nextInt(256)));
-  }
-
-  List<int> sha256(List<int> data) => crypto.sha256.convert(data).bytes;
 }

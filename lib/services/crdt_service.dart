@@ -4,8 +4,7 @@ import 'dart:typed_data';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
-import 'package:cryptography/cryptography.dart';
-import 'crypto_service.dart';
+import 'fips_crypto_service.dart';
 
 /// A simplified CRDT (Conflict-free Replicated Data Type) implementation
 /// using Last-Writer-Wins (LWW) strategy with Lamport timestamps.
@@ -178,19 +177,20 @@ class CrdtDocument {
 }
 
 /// Service for managing CRDT state with persistence and encryption
+/// Uses FIPS-compliant Rust FFI for all cryptographic operations
 class CrdtService {
   static const String _boxName = 'qsv_crdt';
   static const String _docKey = 'document';
   static const String _deviceIdKey = 'device_id';
   
-  final CryptoService _crypto;
+  final FipsCryptoService _crypto;
   Box? _box;
   CrdtDocument? _document;
   String? _deviceId;
   
   final _changeController = StreamController<CrdtChangeEvent>.broadcast();
   
-  CrdtService({CryptoService? crypto}) : _crypto = crypto ?? CryptoService();
+  CrdtService({FipsCryptoService? crypto}) : _crypto = crypto ?? FipsCryptoService();
   
   /// Stream of change events for UI updates
   Stream<CrdtChangeEvent> get changes => _changeController.stream;
@@ -310,17 +310,19 @@ class CrdtService {
     return merged;
   }
   
-  /// Serialize document for sync (encrypted)
-  Future<Uint8List> serializeEncrypted(SecretKey key) async {
+  /// Serialize document for sync (encrypted using FIPS-compliant AES-256-GCM)
+  Uint8List serializeEncrypted(Uint8List key) {
     if (_document == null) throw StateError('CRDT not initialized');
     
     final json = jsonEncode(_document!.toJson());
-    return await _encryptData(key, json);
+    final plaintext = Uint8List.fromList(utf8.encode(json));
+    return _crypto.encrypt(key: key, plaintext: plaintext);
   }
   
   /// Deserialize encrypted document from peer
-  Future<CrdtDocument> deserializeEncrypted(SecretKey key, Uint8List data) async {
-    final json = await _decryptData(key, data);
+  CrdtDocument deserializeEncrypted(Uint8List key, Uint8List data) {
+    final decrypted = _crypto.decrypt(key: key, ciphertext: data);
+    final json = utf8.decode(decrypted);
     return CrdtDocument.fromJson(jsonDecode(json) as Map<String, dynamic>);
   }
   
@@ -328,37 +330,6 @@ class CrdtService {
   CrdtDocument getDelta({required int sinceTimestamp}) {
     if (_document == null) throw StateError('CRDT not initialized');
     return _document!.delta(sinceTimestamp: sinceTimestamp);
-  }
-  
-  Future<Uint8List> _encryptData(SecretKey key, String plaintext) async {
-    final aes = AesGcm.with256bits();
-    final nonce = aes.newNonce();
-    final secretBox = await aes.encrypt(
-      utf8.encode(plaintext),
-      secretKey: key,
-      nonce: nonce,
-    );
-    
-    // Format: nonce || ciphertext || mac
-    final output = BytesBuilder();
-    output.add(secretBox.nonce);
-    output.add(secretBox.cipherText);
-    output.add(secretBox.mac.bytes);
-    return Uint8List.fromList(output.toBytes());
-  }
-  
-  Future<String> _decryptData(SecretKey key, Uint8List data) async {
-    final aes = AesGcm.with256bits();
-    const nonceLen = 12;
-    const macLen = 16;
-    
-    final nonce = data.sublist(0, nonceLen);
-    final cipherText = data.sublist(nonceLen, data.length - macLen);
-    final mac = Mac(data.sublist(data.length - macLen));
-    
-    final secretBox = SecretBox(cipherText, nonce: nonce, mac: mac);
-    final clear = await aes.decrypt(secretBox, secretKey: key);
-    return utf8.decode(clear);
   }
   
   /// Close the service

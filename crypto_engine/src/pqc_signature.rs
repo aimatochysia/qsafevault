@@ -1,18 +1,21 @@
-// Post-Quantum Digital Signatures: Dilithium wrapper
+// Post-Quantum Digital Signatures: ML-DSA-65 wrapper (FIPS 204)
+// FIPS 204 Module-Lattice-Based Digital Signature Algorithm
+// Using ML-DSA-65 for balanced security/performance (NIST Level 3)
 // Provides NIST-standardized post-quantum digital signatures for device identity and sync authentication
-use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::sign::{PublicKey as PublicKeyTrait, SecretKey as SecretKeyTrait, SignedMessage, DetachedSignature};
 
-/// PQC signature keypair (Dilithium3 - NIST Level 3 security)
-/// Note: The pqcrypto-dilithium library handles secure memory management internally
+use pqcrypto_mldsa::mldsa65;
+use pqcrypto_traits::sign::{PublicKey as PublicKeyTrait, SecretKey as SecretKeyTrait, DetachedSignature, SignedMessage as SignedMessageTrait};
+
+/// PQC signature keypair (ML-DSA-65 - FIPS 204 certified, NIST Level 3)
+/// Note: The pqcrypto-mldsa library handles secure memory management internally
 pub struct PqcSigningKeypair {
-    pub public_key: dilithium3::PublicKey,
-    pub secret_key: dilithium3::SecretKey,
+    pub public_key: mldsa65::PublicKey,
+    pub secret_key: mldsa65::SecretKey,
 }
 
 /// PQC detached signature
 pub struct PqcSignature {
-    signature: dilithium3::DetachedSignature,
+    signature: mldsa65::DetachedSignature,
 }
 
 /// PQC signed message (signature + message combined)
@@ -21,9 +24,9 @@ pub struct PqcSignedMessage {
 }
 
 impl PqcSigningKeypair {
-    /// Generate a new Dilithium3 signing keypair
+    /// Generate a new ML-DSA-65 signing keypair (FIPS 204)
     pub fn generate() -> Self {
-        let (pk, sk) = dilithium3::keypair();
+        let (pk, sk) = mldsa65::keypair();
         Self {
             public_key: pk,
             secret_key: sk,
@@ -42,10 +45,10 @@ impl PqcSigningKeypair {
 
     /// Deserialize keypair from bytes
     pub fn from_bytes(public_key_bytes: &[u8], secret_key_bytes: &[u8]) -> Result<Self, String> {
-        let pk = dilithium3::PublicKey::from_bytes(public_key_bytes)
-            .map_err(|_| "Invalid Dilithium public key")?;
-        let sk = dilithium3::SecretKey::from_bytes(secret_key_bytes)
-            .map_err(|_| "Invalid Dilithium secret key")?;
+        let pk = mldsa65::PublicKey::from_bytes(public_key_bytes)
+            .map_err(|_| "Invalid ML-DSA-65 public key")?;
+        let sk = mldsa65::SecretKey::from_bytes(secret_key_bytes)
+            .map_err(|_| "Invalid ML-DSA-65 secret key")?;
         Ok(Self {
             public_key: pk,
             secret_key: sk,
@@ -54,13 +57,13 @@ impl PqcSigningKeypair {
 
     /// Sign a message (returns detached signature)
     pub fn sign(&self, message: &[u8]) -> PqcSignature {
-        let sig = dilithium3::detached_sign(message, &self.secret_key);
+        let sig = mldsa65::detached_sign(message, &self.secret_key);
         PqcSignature { signature: sig }
     }
 
     /// Sign a message (returns signed message with embedded signature)
     pub fn sign_message(&self, message: &[u8]) -> PqcSignedMessage {
-        let signed = dilithium3::sign(message, &self.secret_key);
+        let signed = mldsa65::sign(message, &self.secret_key);
         PqcSignedMessage {
             signed_data: signed.as_bytes().to_vec(),
         }
@@ -73,10 +76,10 @@ pub fn verify(
     message: &[u8],
     signature: &PqcSignature,
 ) -> Result<bool, String> {
-    let pk = dilithium3::PublicKey::from_bytes(public_key_bytes)
-        .map_err(|_| "Invalid Dilithium public key")?;
+    let pk = mldsa65::PublicKey::from_bytes(public_key_bytes)
+        .map_err(|_| "Invalid ML-DSA-65 public key")?;
     
-    match dilithium3::verify_detached_signature(&signature.signature, message, &pk) {
+    match mldsa65::verify_detached_signature(&signature.signature, message, &pk) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -87,13 +90,13 @@ pub fn verify_signed_message(
     public_key_bytes: &[u8],
     signed_message: &PqcSignedMessage,
 ) -> Result<Vec<u8>, String> {
-    let pk = dilithium3::PublicKey::from_bytes(public_key_bytes)
-        .map_err(|_| "Invalid Dilithium public key")?;
+    let pk = mldsa65::PublicKey::from_bytes(public_key_bytes)
+        .map_err(|_| "Invalid ML-DSA-65 public key")?;
     
-    let sm = dilithium3::SignedMessage::from_bytes(&signed_message.signed_data)
+    let sm = mldsa65::SignedMessage::from_bytes(&signed_message.signed_data)
         .map_err(|_| "Invalid signed message")?;
     
-    dilithium3::open(&sm, &pk)
+    mldsa65::open(&sm, &pk)
         .map(|v| v.to_vec())
         .map_err(|_| "Signature verification failed".to_string())
 }
@@ -106,8 +109,8 @@ impl PqcSignature {
 
     /// Deserialize signature from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let sig = dilithium3::DetachedSignature::from_bytes(bytes)
-            .map_err(|_| "Invalid Dilithium signature")?;
+        let sig = mldsa65::DetachedSignature::from_bytes(bytes)
+            .map_err(|_| "Invalid ML-DSA-65 signature")?;
         Ok(Self { signature: sig })
     }
 }

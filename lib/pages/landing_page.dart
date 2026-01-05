@@ -1,12 +1,11 @@
 import 'dart:isolate';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import '/services/crypto_service.dart';
+import '/services/fips_crypto_service.dart';
 import '/services/storage_service.dart';
 import '/pages/home_page.dart';
-import 'package:cryptography/cryptography.dart';
 import 'package:qsafevault/services/theme_service.dart';
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
@@ -14,7 +13,7 @@ import 'package:flutter/services.dart';
 
 class LandingPage extends StatefulWidget {
   final StorageService storage;
-  final CryptoService cryptoService;
+  final FipsCryptoService cryptoService;
   const LandingPage(
       {Key? key, required this.storage, required this.cryptoService})
       : super(key: key);
@@ -270,7 +269,7 @@ class _LandingPageState extends State<LandingPage> {
     }
   }
 
-  Future<({String plaintext, SecretKey key})> _deriveKeyWithIsolate(
+  Future<({String plaintext, Uint8List key})> _deriveKeyWithIsolate(
     String folderPath, String password) async {
     final receivePort = ReceivePort();
     final token = RootIsolateToken.instance;
@@ -280,7 +279,7 @@ class _LandingPageState extends State<LandingPage> {
     if (result['ok'] == false) {
       throw Exception(result['error']);
     }
-    final key = SecretKey(result['keyBytes'] as List<int>);
+    final key = Uint8List.fromList(result['keyBytes'] as List<int>);
     final plaintext = result['plaintext'] as String;
     return (plaintext: plaintext, key: key);
   }
@@ -294,10 +293,10 @@ class _LandingPageState extends State<LandingPage> {
       BackgroundIsolateBinaryMessenger.ensureInitialized(token);
     }
     try {
-      final storage = StorageService(CryptoService());
+      final storage = StorageService(FipsCryptoService());
       final result =
           await storage.openDb(folderPath: folderPath, password: password);
-      final keyBytes = await result.key.extractBytes();
+      final keyBytes = result.key;
       sendPort.send(
           {'ok': true, 'plaintext': result.plaintext, 'keyBytes': keyBytes});
     } catch (e) {

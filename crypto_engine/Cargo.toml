@@ -14,20 +14,25 @@ zeroize = { version = "1.7", features = ["derive"] }
 aes-gcm = "0.10"
 aead = { version = "0.5", features = ["std"] }
 
-# HKDF with SHA3 for key derivation
-hkdf = "0.12"
-sha3 = "0.10"
-
-# X25519 for classical ECDH
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+# FIPS-compliant key derivation using SHA-256
+sha2 = "0.10"
 rand_core = { version = "0.6", features = ["getrandom"] }
 
-# Kyber ML-KEM for post-quantum KEM
+# HMAC for FIPS-compliant message authentication
+hmac = "0.12"
+
+# PBKDF2 for FIPS-compliant password-based key derivation (NIST SP 800-132)
+pbkdf2 = "0.12"
+
+# FIPS 203: ML-KEM-1024 for post-quantum KEM
 pqcrypto-mlkem = "0.1"
 pqcrypto-traits = "0.3"
 
-# Dilithium for post-quantum digital signatures
-pqcrypto-dilithium = "0.5"
+# FIPS 204: ML-DSA-65 for post-quantum digital signatures
+pqcrypto-mldsa = "0.1"
+
+# FIPS 205: SLH-DSA (SPHINCS+) for stateless hash-based signatures
+pqcrypto-sphincsplus = "0.7"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

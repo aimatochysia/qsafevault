@@ -3,19 +3,19 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:cryptography/cryptography.dart';
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import '../config/sync_config.dart';
 import 'app_logger.dart';
 import 'invite_code_utils.dart';
+import 'fips_crypto_service.dart';
 
 /// WebRTC Peer Connection Manager for P2P sync.
 /// Uses STUN servers only for NAT traversal (no TURN).
-/// All data is end-to-end encrypted.
+/// All data is end-to-end encrypted using FIPS-compliant Rust FFI.
 class P2pPeerService {
   final SyncConfig _config;
   final http.Client _http;
+  final FipsCryptoService _crypto;
   
   RTCPeerConnection? _peerConnection;
   RTCDataChannel? _dataChannel;
@@ -25,7 +25,7 @@ class P2pPeerService {
   String? _remotePeerId;
   String? _inviteCode;
   
-  SecretKey? _encryptionKey;
+  Uint8List? _encryptionKey;
   
   bool _isInitiator = false;
   bool _isConnected = false;
@@ -38,8 +38,10 @@ class P2pPeerService {
   P2pPeerService({
     SyncConfig? config,
     http.Client? httpClient,
+    FipsCryptoService? crypto,
   }) : _config = config ?? SyncConfig.defaults(),
-       _http = httpClient ?? http.Client();
+       _http = httpClient ?? http.Client(),
+       _crypto = crypto ?? FipsCryptoService();
   
   /// Stream of incoming messages
   Stream<P2pMessage> get messages => _messageController.stream;
@@ -70,8 +72,8 @@ class P2pPeerService {
     _localPeerId = _generatePeerId();
     _inviteCode = InviteCodeUtils.generate();
     
-    // Derive encryption key from invite code + password
-    _encryptionKey = await _deriveKey(_inviteCode!, transferPassword);
+    // Derive encryption key from invite code + password using FIPS-compliant PBKDF2
+    _encryptionKey = _deriveKey(_inviteCode!, transferPassword);
     
     _log('Initializing as initiator with invite code: $_inviteCode');
     
@@ -105,8 +107,8 @@ class P2pPeerService {
     _localPeerId = _generatePeerId();
     _inviteCode = inviteCode;
     
-    // Derive encryption key from invite code + password
-    _encryptionKey = await _deriveKey(inviteCode, transferPassword);
+    // Derive encryption key from invite code + password using FIPS-compliant PBKDF2
+    _encryptionKey = _deriveKey(inviteCode, transferPassword);
     
     _log('Initializing as joiner with invite code: $inviteCode');
     
@@ -133,21 +135,16 @@ class P2pPeerService {
     return base64Url.encode(bytes);
   }
   
-  Future<SecretKey> _deriveKey(String inviteCode, String password) async {
+  /// Derive encryption key using PBKDF2-HMAC-SHA256 (FIPS-compliant)
+  Uint8List _deriveKey(String inviteCode, String password) {
     final tag = 'qsv-p2p-v1|$inviteCode|$password';
-    final digest = crypto.sha256.convert(utf8.encode(tag));
-    final salt = Uint8List.fromList(digest.bytes.sublist(0, 16));
+    final digest = _crypto.sha256String(tag);
+    final salt = Uint8List.fromList(digest.sublist(0, 16));
     
-    final argon2 = Argon2id(
-      memory: 65536,
-      iterations: 2,
-      parallelism: 1,
-      hashLength: 32,
-    );
-    
-    return await argon2.deriveKey(
-      secretKey: SecretKey(utf8.encode(password)),
-      nonce: salt,
+    return _crypto.deriveKeyFromPassword(
+      password: password,
+      salt: salt,
+      iterations: 100000,  // FIPS-compliant iteration count
     );
   }
   
@@ -235,7 +232,7 @@ class P2pPeerService {
     
     channel.onMessage = (message) async {
       try {
-        final decrypted = await _decryptMessage(message.binary);
+        final decrypted = _decryptMessage(message.binary);
         final json = jsonDecode(decrypted) as Map<String, dynamic>;
         _messageController.add(P2pMessage.fromJson(json));
       } catch (e) {
@@ -251,43 +248,25 @@ class P2pPeerService {
     }
     
     final json = jsonEncode(message.toJson());
-    final encrypted = await _encryptMessage(json);
+    final encrypted = _encryptMessage(json);
     
     _dataChannel!.send(RTCDataChannelMessage.fromBinary(encrypted));
   }
   
-  Future<Uint8List> _encryptMessage(String plaintext) async {
+  /// Encrypt message using AES-256-GCM (FIPS 197)
+  Uint8List _encryptMessage(String plaintext) {
     if (_encryptionKey == null) throw StateError('No encryption key');
     
-    final aes = AesGcm.with256bits();
-    final nonce = aes.newNonce();
-    final secretBox = await aes.encrypt(
-      utf8.encode(plaintext),
-      secretKey: _encryptionKey!,
-      nonce: nonce,
-    );
-    
-    final output = BytesBuilder();
-    output.add(secretBox.nonce);
-    output.add(secretBox.cipherText);
-    output.add(secretBox.mac.bytes);
-    return Uint8List.fromList(output.toBytes());
+    final plaintextBytes = Uint8List.fromList(utf8.encode(plaintext));
+    return _crypto.encrypt(key: _encryptionKey!, plaintext: plaintextBytes);
   }
   
-  Future<String> _decryptMessage(Uint8List data) async {
+  /// Decrypt message using AES-256-GCM (FIPS 197)
+  String _decryptMessage(Uint8List data) {
     if (_encryptionKey == null) throw StateError('No encryption key');
     
-    final aes = AesGcm.with256bits();
-    const nonceLen = 12;
-    const macLen = 16;
-    
-    final nonce = data.sublist(0, nonceLen);
-    final cipherText = data.sublist(nonceLen, data.length - macLen);
-    final mac = Mac(data.sublist(data.length - macLen));
-    
-    final secretBox = SecretBox(cipherText, nonce: nonce, mac: mac);
-    final clear = await aes.decrypt(secretBox, secretKey: _encryptionKey!);
-    return utf8.decode(clear);
+    final decrypted = _crypto.decrypt(key: _encryptionKey!, ciphertext: data);
+    return utf8.decode(decrypted);
   }
   
   // ==================== Signaling ====================

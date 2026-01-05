@@ -218,12 +218,12 @@ async function testPeerRegistration() {
   const peerId = 'peer-uuid-12345';
   
   // Register peer
-  let result = sessionManager.registerPeer(inviteCode, peerId);
+  let result = await sessionManager.registerPeer(inviteCode, peerId);
   assertEqual(result.status, 'registered', 'Registration should succeed');
   assertTruthy(result.ttlSec > 0, 'TTL should be returned');
   
   // Lookup peer
-  result = sessionManager.lookupPeer(inviteCode);
+  result = await sessionManager.lookupPeer(inviteCode);
   assertEqual(result.peerId, peerId, 'Lookup should return peerId');
   
   console.log('✓ Peer registration test passed');
@@ -235,15 +235,15 @@ async function testInvalidInviteCodeFormat() {
   const peerId = 'peer-uuid-12345';
   
   // Test too short
-  let result = sessionManager.registerPeer('abc', peerId);
+  let result = await sessionManager.registerPeer('abc', peerId);
   assertEqual(result.error, 'invalid_invite_code', 'Short code should be rejected');
   
   // Test too long
-  result = sessionManager.registerPeer('abcdefghi', peerId);
+  result = await sessionManager.registerPeer('abcdefghi', peerId);
   assertEqual(result.error, 'invalid_invite_code', 'Long code should be rejected');
   
   // Test invalid characters
-  result = sessionManager.registerPeer('abc-efgh', peerId);
+  result = await sessionManager.registerPeer('abc-efgh', peerId);
   assertEqual(result.error, 'invalid_invite_code', 'Special chars should be rejected');
   
   console.log('✓ Invalid invite code format test passed');
@@ -256,7 +256,7 @@ async function testSignalQueueing() {
   const toPeer = 'peer-B';
   
   // Queue signals
-  let result = sessionManager.queueSignal({
+  let result = await sessionManager.queueSignal({
     from: fromPeer,
     to: toPeer,
     type: 'offer',
@@ -264,7 +264,7 @@ async function testSignalQueueing() {
   });
   assertEqual(result.status, 'queued', 'Signal should be queued');
   
-  result = sessionManager.queueSignal({
+  result = await sessionManager.queueSignal({
     from: fromPeer,
     to: toPeer,
     type: 'ice-candidate',
@@ -273,13 +273,13 @@ async function testSignalQueueing() {
   assertEqual(result.status, 'queued', 'ICE candidate should be queued');
   
   // Poll signals
-  result = sessionManager.pollSignals(toPeer);
+  result = await sessionManager.pollSignals(toPeer);
   assertEqual(result.messages.length, 2, 'Should receive 2 messages');
   assertEqual(result.messages[0].type, 'offer', 'First message should be offer');
   assertEqual(result.messages[1].type, 'ice-candidate', 'Second message should be ICE');
   
   // Poll again should be empty
-  result = sessionManager.pollSignals(toPeer);
+  result = await sessionManager.pollSignals(toPeer);
   assertEqual(result.messages.length, 0, 'Queue should be empty after poll');
   
   console.log('✓ Signal queueing test passed');
@@ -293,15 +293,15 @@ async function testInviteCodeCollision() {
   const peerId2 = 'peer-second';
   
   // Register first peer
-  let result = sessionManager.registerPeer(inviteCode, peerId1);
+  let result = await sessionManager.registerPeer(inviteCode, peerId1);
   assertEqual(result.status, 'registered', 'First registration should succeed');
   
   // Try to register different peer with same code
-  result = sessionManager.registerPeer(inviteCode, peerId2);
+  result = await sessionManager.registerPeer(inviteCode, peerId2);
   assertEqual(result.error, 'invite_code_in_use', 'Second peer should be rejected');
   
   // Same peer re-registering should work
-  result = sessionManager.registerPeer(inviteCode, peerId1);
+  result = await sessionManager.registerPeer(inviteCode, peerId1);
   assertEqual(result.status, 'registered', 'Same peer re-registration should succeed');
   
   console.log('✓ Invite code collision test passed');
@@ -322,6 +322,7 @@ async function runTests() {
     await testInvalidInviteCodeFormat();
     await testSignalQueueing();
     await testInviteCodeCollision();
+    await testConcurrentChunkWrites();
     
     console.log('\n=== All Tests Passed! ===');
     process.exit(0);
@@ -330,6 +331,55 @@ async function runTests() {
     console.error(error.stack);
     process.exit(1);
   }
+}
+
+/**
+ * Test concurrent chunk writes - simulates cross-device sync scenario
+ * where multiple chunks are sent in parallel via Promise.all
+ */
+async function testConcurrentChunkWrites() {
+  console.log('Test: Concurrent chunk writes (cross-device sync)');
+  
+  const pin = 'Cc8Dd9Ee';
+  const passwordHash = `concurrent-${Date.now()}`;
+  const numChunks = 3;
+  
+  // Push all chunks concurrently (simulates Promise.all in the test)
+  const pushPromises = [];
+  for (let i = 0; i < numChunks; i++) {
+    pushPromises.push(
+      sessionManager.pushChunk({
+        pin,
+        passwordHash,
+        chunkIndex: i,
+        totalChunks: numChunks,
+        data: `chunk-data-${i}`,
+      })
+    );
+  }
+  
+  const pushResults = await Promise.all(pushPromises);
+  
+  // All pushes should succeed (status: 'waiting')
+  pushResults.forEach((result, i) => {
+    assertEqual(result.status, 'waiting', `Chunk ${i} push should return waiting`);
+    assertFalsy(result.error, `Chunk ${i} push should not have error`);
+  });
+  
+  // Now receive all chunks
+  const receivedChunks = [];
+  for (let i = 0; i < numChunks; i++) {
+    const result = await sessionManager.nextChunk({ pin, passwordHash });
+    if (result.status === 'chunkAvailable') {
+      receivedChunks.push(result.chunk.chunkIndex);
+    }
+  }
+  
+  // Sort and compare
+  receivedChunks.sort((a, b) => a - b);
+  assertEqual(receivedChunks, [0, 1, 2], 'All chunks should be received');
+  
+  console.log(`✓ Concurrent chunk writes test passed (${numChunks} chunks)`);
 }
 
 // Run tests if called directly

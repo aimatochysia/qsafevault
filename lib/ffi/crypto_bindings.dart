@@ -283,6 +283,138 @@ typedef DartGetVersion = int Function(
 );
 
 // =============================================================================
+// FIPS-Compliant Symmetric Cryptography FFI Signatures
+// =============================================================================
+
+/// Native function signature for AES-256-GCM encryption
+typedef NativeAesGcmEncrypt = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> key,           // 32 bytes
+  ffi.Pointer<ffi.Uint8> plaintext,
+  ffi.Size plaintextLen,
+  ffi.Pointer<ffi.Uint8> aad,           // Optional
+  ffi.Size aadLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> ciphertextOut,
+  ffi.Pointer<ffi.Size> ciphertextLenOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for AES-256-GCM decryption
+typedef NativeAesGcmDecrypt = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> key,           // 32 bytes
+  ffi.Pointer<ffi.Uint8> ciphertext,    // nonce || ciphertext || tag
+  ffi.Size ciphertextLen,
+  ffi.Pointer<ffi.Uint8> aad,           // Optional
+  ffi.Size aadLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> plaintextOut,
+  ffi.Pointer<ffi.Size> plaintextLenOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for SHA-256 hash
+typedef NativeSha256 = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> data,
+  ffi.Size dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> hashOut,  // 32 bytes
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for HMAC-SHA256
+typedef NativeHmacSha256 = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> key,
+  ffi.Size keyLen,
+  ffi.Pointer<ffi.Uint8> data,
+  ffi.Size dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> macOut,   // 32 bytes
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for HMAC-SHA512
+typedef NativeHmacSha512 = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> key,
+  ffi.Size keyLen,
+  ffi.Pointer<ffi.Uint8> data,
+  ffi.Size dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> macOut,   // 64 bytes
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for PBKDF2-HMAC-SHA256
+typedef NativePbkdf2Sha256 = ffi.Int32 Function(
+  ffi.Pointer<ffi.Uint8> password,
+  ffi.Size passwordLen,
+  ffi.Pointer<ffi.Uint8> salt,
+  ffi.Size saltLen,
+  ffi.Uint32 iterations,
+  ffi.Size outputKeyLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outputKeyOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for AES-256-GCM encryption
+typedef DartAesGcmEncrypt = int Function(
+  ffi.Pointer<ffi.Uint8> key,
+  ffi.Pointer<ffi.Uint8> plaintext,
+  int plaintextLen,
+  ffi.Pointer<ffi.Uint8> aad,
+  int aadLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> ciphertextOut,
+  ffi.Pointer<ffi.Size> ciphertextLenOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for AES-256-GCM decryption
+typedef DartAesGcmDecrypt = int Function(
+  ffi.Pointer<ffi.Uint8> key,
+  ffi.Pointer<ffi.Uint8> ciphertext,
+  int ciphertextLen,
+  ffi.Pointer<ffi.Uint8> aad,
+  int aadLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> plaintextOut,
+  ffi.Pointer<ffi.Size> plaintextLenOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for SHA-256 hash
+typedef DartSha256 = int Function(
+  ffi.Pointer<ffi.Uint8> data,
+  int dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> hashOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for HMAC-SHA256
+typedef DartHmacSha256 = int Function(
+  ffi.Pointer<ffi.Uint8> key,
+  int keyLen,
+  ffi.Pointer<ffi.Uint8> data,
+  int dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> macOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for HMAC-SHA512
+typedef DartHmacSha512 = int Function(
+  ffi.Pointer<ffi.Uint8> key,
+  int keyLen,
+  ffi.Pointer<ffi.Uint8> data,
+  int dataLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> macOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for PBKDF2-HMAC-SHA256
+typedef DartPbkdf2Sha256 = int Function(
+  ffi.Pointer<ffi.Uint8> password,
+  int passwordLen,
+  ffi.Pointer<ffi.Uint8> salt,
+  int saltLen,
+  int iterations,
+  int outputKeyLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outputKeyOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+// =============================================================================
 // Edition System FFI Signatures
 // =============================================================================
 

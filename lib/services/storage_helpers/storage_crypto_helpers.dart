@@ -1,105 +1,84 @@
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
-import 'package:cryptography/cryptography.dart';
-import 'package:crypto/crypto.dart' as crypto;
-import 'package:pointycastle/export.dart' as pc;
+import '../fips_crypto_service.dart';
 import 'storage_constants.dart' as sc;
-final AesGcm _aesGcm = AesGcm.with256bits();
+
+// Use FipsCryptoService for all cryptographic operations
+final FipsCryptoService _fipsCrypto = FipsCryptoService();
+
 List<int> secureRandomBytes(int length) =>
-    List<int>.generate(length, (_) => Random.secure().nextInt(256));
+    _fipsCrypto.generateRandomBytes(length);
+
 void zeroBytes(List<int> bytes) {
   for (var i = 0; i < bytes.length; i++) bytes[i] = 0;
 }
+
 bool constantTimeEquals(List<int> a, List<int> b) {
-  if (a.length != b.length) return false;
-  var diff = 0;
-  for (var i = 0; i < a.length; i++) {
-    diff |= (a[i] ^ b[i]);
-  }
-  return diff == 0;
+  return _fipsCrypto.constantTimeEquals(a, b);
 }
-Future<Uint8List> makeVerifier(SecretKey key) async {
-  final keyBytes = Uint8List.fromList(await key.extractBytes());
+
+/// Make verifier using HMAC-SHA512 (FIPS 198-1)
+Uint8List makeVerifier(Uint8List keyBytes) {
   try {
-    final mac = pc.HMac(pc.SHA3Digest(512), 72);
-    mac.init(pc.KeyParameter(keyBytes));
-    final data = Uint8List.fromList(utf8.encode(sc.verifierLabel));
-    mac.update(data, 0, data.length);
-    final out = Uint8List(mac.macSize);
-    mac.doFinal(out, 0);
-    return out;
+    return _fipsCrypto.hmacSha512(
+      key: keyBytes, 
+      data: Uint8List.fromList(utf8.encode(sc.verifierLabel)),
+    );
   } finally {
     zeroBytes(keyBytes);
   }
 }
+
 String _canonicalFastParamsString(Map<String, dynamic> m) {
-  final kdf = (m['kdf'] as String?) ?? 'argon2id';
+  final kdf = (m['kdf'] as String?) ?? 'pbkdf2';
   final iterations = (m['iterations'] as int?) ?? 0;
-  final memoryKb = (m['memoryKb'] as int?) ?? 0;
-  final parallelism = (m['parallelism'] as int?) ?? 0;
   final salt = (m['salt'] as String?) ?? '';
-  return 'k=$kdf;i=$iterations;m=$memoryKb;p=$parallelism;s=$salt';
+  return 'k=$kdf;i=$iterations;s=$salt';
 }
-Future<Uint8List> signFastParams(SecretKey masterKey, Map<String, dynamic> fastMeta) async {
-  final keyBytes = Uint8List.fromList(await masterKey.extractBytes());
+
+/// Sign fast parameters using HMAC-SHA512 (FIPS 198-1)
+Uint8List signFastParams(Uint8List masterKeyBytes, Map<String, dynamic> fastMeta) {
   try {
-    final mac = pc.HMac(pc.SHA3Digest(512), 128);
-    mac.init(pc.KeyParameter(keyBytes));
     final canonical = _canonicalFastParamsString(fastMeta);
     final data = Uint8List.fromList(utf8.encode('${sc.fastSigLabel}|$canonical'));
-    mac.update(data, 0, data.length);
-    final out = Uint8List(mac.macSize);
-    mac.doFinal(out, 0);
-    return out;
+    return _fipsCrypto.hmacSha512(key: masterKeyBytes, data: data);
   } finally {
-    zeroBytes(keyBytes);
+    zeroBytes(masterKeyBytes);
   }
 }
-Future<Uint8List> computeWrapNonce(SecretKey wrappingKey, int counter) async {
-  final keyBytes = Uint8List.fromList(await wrappingKey.extractBytes());
+
+/// Compute wrap nonce using HMAC-SHA256 (FIPS 198-1)
+Uint8List computeWrapNonce(Uint8List wrappingKeyBytes, int counter) {
   try {
-    final hmac = crypto.Hmac(crypto.sha256, keyBytes);
-    final msg = utf8.encode('${sc.keyWrapLabel}|ctr:$counter');
-    final digest = hmac.convert(msg).bytes;
+    final msg = Uint8List.fromList(utf8.encode('${sc.keyWrapLabel}|ctr:$counter'));
+    final digest = _fipsCrypto.hmacSha256(key: wrappingKeyBytes, data: msg);
     return Uint8List.fromList(digest.sublist(0, 12));
   } finally {
-    zeroBytes(keyBytes);
+    zeroBytes(wrappingKeyBytes);
   }
 }
-Future<Uint8List> wrapKeyWithAesGcm({
-  required SecretKey wrappingKey,
+
+/// Wrap key using AES-256-GCM (FIPS 197)
+/// Note: The Rust FFI generates a random nonce internally for security
+Uint8List wrapKeyWithAesGcm({
+  required Uint8List wrappingKey,
   required List<int> toWrap,
-  required Uint8List nonce,
-}) async {
+}) {
   final labelBytes = utf8.encode(sc.keyWrapLabel);
   final msg = Uint8List(labelBytes.length + toWrap.length)
     ..setRange(0, labelBytes.length, labelBytes)
     ..setRange(labelBytes.length, labelBytes.length + toWrap.length, toWrap);
-  final secretBox = await _aesGcm.encrypt(
-    msg,
-    secretKey: wrappingKey,
-    nonce: nonce,
-  );
-  final blob = BytesBuilder();
-  blob.add(nonce);
-  blob.add(secretBox.cipherText);
-  blob.add(secretBox.mac.bytes);
-  return Uint8List.fromList(blob.toBytes());
+  
+  // AES-GCM encryption returns nonce || ciphertext || tag
+  final encrypted = _fipsCrypto.encrypt(key: wrappingKey, plaintext: msg);
+  return encrypted;
 }
-Future<Uint8List> unwrapKeyWithAesGcm(SecretKey wrappingKey, List<int> blob) async {
+
+/// Unwrap key using AES-256-GCM (FIPS 197)
+Uint8List unwrapKeyWithAesGcm(Uint8List wrappingKey, List<int> blob) {
   if (blob.length < 12 + 16) throw Exception('Invalid wrapped blob.');
-  final nonce = blob.sublist(0, 12);
-  final macLen = 16;
-  final macStart = blob.length - macLen;
-  final cipherText = blob.sublist(12, macStart);
-  final macBytes = blob.sublist(macStart);
-  final secretBox = SecretBox(
-    Uint8List.fromList(cipherText),
-    nonce: Uint8List.fromList(nonce),
-    mac: Mac(macBytes),
-  );
-  final plain = await _aesGcm.decrypt(secretBox, secretKey: wrappingKey);
+  
+  final plain = _fipsCrypto.decrypt(key: wrappingKey, ciphertext: Uint8List.fromList(blob));
   final labelBytes = utf8.encode(sc.keyWrapLabel);
   if (plain.length <= labelBytes.length) {
     throw Exception('Wrapped key payload too short.');
@@ -113,47 +92,47 @@ Future<Uint8List> unwrapKeyWithAesGcm(SecretKey wrappingKey, List<int> blob) asy
   zeroBytes(plain);
   return keyBytes;
 }
-Future<Uint8List> computeEntryNonce(
-  SecretKey masterKey,
+
+/// Compute entry nonce using HMAC-SHA256 (FIPS 198-1)
+Uint8List computeEntryNonce(
+  Uint8List masterKeyBytes,
   int counter, {
   String? entryId,
-}) async {
-  final keyBytes = Uint8List.fromList(await masterKey.extractBytes());
+}) {
   try {
-    final hmac = crypto.Hmac(crypto.sha256, keyBytes);
     final sb = StringBuffer('${sc.entryNonceLabel}|nonce|ctr:$counter');
     if (entryId != null) sb.write('|id:$entryId');
-    final digest = hmac.convert(utf8.encode(sb.toString())).bytes;
+    final msg = Uint8List.fromList(utf8.encode(sb.toString()));
+    final digest = _fipsCrypto.hmacSha256(key: masterKeyBytes, data: msg);
     return Uint8List.fromList(digest.sublist(0, 12));
   } finally {
-    zeroBytes(keyBytes);
+    zeroBytes(masterKeyBytes);
   }
 }
-Future<Uint8List> computeEntryAcceptTag(
-  SecretKey masterKey,
+
+/// Compute entry accept tag using HMAC-SHA512 (FIPS 198-1)
+Uint8List computeEntryAcceptTag(
+  Uint8List masterKeyBytes,
   int counter,
   Uint8List challenge, {
   String? entryId,
-}) async {
-  final keyBytes = Uint8List.fromList(await masterKey.extractBytes());
+}) {
   try {
-    final mac = pc.HMac(pc.SHA3Digest(512), 128);
-    mac.init(pc.KeyParameter(keyBytes));
     final sb = StringBuffer('${sc.entryNonceLabel}|accept|ctr:$counter');
     if (entryId != null) sb.write('|id:$entryId');
-    final prefix = Uint8List.fromList(utf8.encode(sb.toString() + '|chal:'));
-    mac.update(prefix, 0, prefix.length);
-    mac.update(challenge, 0, challenge.length);
-    final out = Uint8List(mac.macSize);
-    mac.doFinal(out, 0);
-    zeroBytes(prefix);
-    return out;
+    final prefix = sb.toString() + '|chal:';
+    final data = Uint8List(prefix.length + challenge.length)
+      ..setRange(0, prefix.length, utf8.encode(prefix))
+      ..setRange(prefix.length, prefix.length + challenge.length, challenge);
+    return _fipsCrypto.hmacSha512(key: masterKeyBytes, data: data);
   } finally {
-    zeroBytes(keyBytes);
+    zeroBytes(masterKeyBytes);
   }
 }
+
+/// Compute folder key ID using SHA-256 (FIPS 180-4)
 String folderKeyId(String folderPath) {
-  final h = crypto.sha256.convert(utf8.encode(folderPath)).bytes;
+  final h = _fipsCrypto.sha256String(folderPath);
   final b64 = base64UrlEncode(h);
   return 'qsv_wrapped_$b64';
 }
