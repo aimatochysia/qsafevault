@@ -149,6 +149,11 @@ class CryptoBackendNotifier {
 
   /// Build sync configuration info string
   String _buildSyncInfo(SyncConfig syncConfig) {
+    // If sync is disabled (Enterprise without custom URL), show that
+    if (syncConfig.syncDisabled) {
+      return 'disabled (set QSV_SYNC_BASEURL)';
+    }
+    
     final parts = <String>[];
     
     // Transport mode (tor or webrtc)
