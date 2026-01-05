@@ -74,17 +74,72 @@ License
 ---
 
 ## Table of contents
-- Overview and architecture
-- Security model
-- Requirements
-- Install and run
-- Build from source
-- Configuration (rendezvous server, environment)
-- Device synchronization (PIN pairing)
-- Troubleshooting
-- Contributing
-- Roadmap
-- License and acknowledgements
+
+- [Post-Quantum Security](#-post-quantum-security)
+- [Product Editions](#-product-editions)
+- [Quick Start](#quick-start)
+  - [Consumer Setup](#consumer-quick-start)
+  - [Enterprise Setup](#enterprise-quick-start)
+- [Overview and architecture](#overview-and-architecture)
+- [Security model](#security-model)
+- [Requirements](#requirements)
+- [Install and run](#install-and-run)
+- [Build from source](#build-from-source)
+- [Configuration](#configuration)
+- [Running the Backend Server](#running-the-backend-server)
+  - [Self-Hosting Guide (Consumer)](#self-hosting-guide-consumer)
+  - [Enterprise Server Deployment](#enterprise-server-deployment)
+- [Device synchronization (PIN relay)](#device-synchronization-pin-relay)
+- [Enterprise Setup: Hardware Security Backends](#enterprise-setup-hardware-security-backends-tpm2--softhsm)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
+- [License and acknowledgements](#license-and-acknowledgements)
+
+---
+
+## Quick Start
+
+### Consumer Quick Start
+
+For personal use with post-quantum security. Uses the public relay by default.
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/user/qsafevault.git
+cd qsafevault
+flutter pub get
+
+# 2. Run the app (uses public relay automatically)
+flutter run
+
+# Optional: Use your own backend server
+flutter run --dart-define=QSV_SYNC_BASEURL=https://your-server.com
+```
+
+### Enterprise Quick Start
+
+For regulated environments requiring FIPS-only cryptography. **Requires self-hosted backend.**
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/user/qsafevault.git
+cd qsafevault
+flutter pub get
+
+# 2. Start your own backend server (see "Enterprise Server Deployment" below)
+cd qsafevault-server
+npm install
+export QSAFEVAULT_EDITION=enterprise
+export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
+node server.js
+
+# 3. Run the app (in a separate terminal)
+cd ..
+flutter run --dart-define=QSAFEVAULT_EDITION=enterprise --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
+```
+
+**Note:** Enterprise mode disables sync by default until you configure `QSV_SYNC_BASEURL`.
 
 ---
 
@@ -282,19 +337,186 @@ flutter run --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
 flutter run --dart-define=QSAFEVAULT_EDITION=enterprise --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
 ```
 
+### Self-Hosting Guide (Consumer)
+
+For Consumer users who want to host their own relay server instead of using the public relay.
+
+#### Option 1: Deploy to Vercel (Recommended)
+
+```bash
+# 1. Fork or clone the repository
+git clone https://github.com/user/qsafevault.git
+cd qsafevault/qsafevault-server
+
+# 2. Install Vercel CLI
+npm install -g vercel
+
+# 3. Deploy
+vercel
+
+# 4. Use your deployment URL in the app
+flutter run --dart-define=QSV_SYNC_BASEURL=https://your-project.vercel.app
+```
+
+#### Option 2: Deploy to Your Own Server
+
+```bash
+# 1. Copy server files to your server
+scp -r qsafevault-server/ user@your-server:/opt/qsafevault-server
+
+# 2. On your server:
+cd /opt/qsafevault-server
+npm install --production
+
+# 3. Run with PM2 (recommended for production)
+npm install -g pm2
+pm2 start server.js --name qsafevault-relay
+
+# 4. Configure reverse proxy (nginx example)
+# server {
+#     listen 443 ssl;
+#     server_name relay.yourdomain.com;
+#     
+#     location / {
+#         proxy_pass http://localhost:3000;
+#         proxy_http_version 1.1;
+#         proxy_set_header Upgrade $http_upgrade;
+#         proxy_set_header Connection 'upgrade';
+#         proxy_set_header Host $host;
+#     }
+# }
+
+# 5. Use your domain in the app
+flutter run --dart-define=QSV_SYNC_BASEURL=https://relay.yourdomain.com
+```
+
+#### Option 3: Run with Docker
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production
+COPY . .
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+```bash
+# Build and run
+docker build -t qsafevault-relay ./qsafevault-server
+docker run -d -p 3000:3000 --name relay qsafevault-relay
+
+# Use in app
+flutter run --dart-define=QSV_SYNC_BASEURL=http://your-server:3000
+```
+
+### Enterprise Server Deployment
+
+For Enterprise deployments requiring FIPS-only mode and strict isolation.
+
+#### Prerequisites
+
+- Node.js 18+ installed
+- HTTPS certificate (required for production)
+- Network isolation (internal network only recommended)
+
+#### Step-by-Step Deployment
+
+```bash
+# 1. Clone repository
+git clone https://github.com/user/qsafevault.git
+cd qsafevault/qsafevault-server
+
+# 2. Install dependencies
+npm install --production
+
+# 3. Set Enterprise environment variables
+export QSAFEVAULT_EDITION=enterprise
+export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
+export PORT=3000  # Optional, defaults to 3000
+
+# 4. Start server
+node server.js
+```
+
+#### Production Deployment with PM2
+
+```bash
+# Create ecosystem file
+cat > ecosystem.config.js << 'EOF'
+module.exports = {
+  apps: [{
+    name: 'qsafevault-relay',
+    script: 'server.js',
+    env: {
+      NODE_ENV: 'production',
+      QSAFEVAULT_EDITION: 'enterprise',
+      QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED: 'true',
+      PORT: 3000
+    }
+  }]
+};
+EOF
+
+# Start with PM2
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup  # Auto-restart on reboot
+```
+
+#### Enterprise Nginx Configuration
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name relay.internal.company.com;
+    
+    # Use internal CA certificates
+    ssl_certificate /etc/ssl/certs/relay.crt;
+    ssl_certificate_key /etc/ssl/private/relay.key;
+    
+    # Restrict to internal IPs only
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    deny all;
+    
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+#### Connecting Enterprise Clients
+
+```bash
+# Build Flutter app for Enterprise
+flutter build windows --dart-define=QSAFEVAULT_EDITION=enterprise --dart-define=QSV_SYNC_BASEURL=https://relay.internal.company.com
+
+flutter build apk --dart-define=QSAFEVAULT_EDITION=enterprise --dart-define=QSV_SYNC_BASEURL=https://relay.internal.company.com
+```
+
+#### Enterprise Security Checklist
+
+- [ ] Server deployed on internal network only
+- [ ] HTTPS with valid certificates (internal CA acceptable)
+- [ ] Firewall rules restricting access to corporate IPs
+- [ ] `QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true` set
+- [ ] No data persistence configured (stateless relay)
+- [ ] PM2 or systemd for process management
+- [ ] Log rotation configured (logs contain no secrets)
+
 ### Running with Vercel (Local Dev Mode)
 
 ```bash
 cd qsafevault-server
 npm start  # Uses 'vercel dev'
-```
-
-### Enterprise Server Configuration
-
-```bash
-export QSAFEVAULT_EDITION=enterprise
-export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
-node server.js
 ```
 
 ---
