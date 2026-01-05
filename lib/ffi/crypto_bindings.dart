@@ -281,3 +281,76 @@ typedef DartDeriveKeyHkdf = int Function(
 typedef DartGetVersion = int Function(
   ffi.Pointer<ffi.Pointer<ffi.Char>> versionOut,
 );
+
+// =============================================================================
+// Edition System FFI Signatures
+// =============================================================================
+
+/// Native function signature for initializing edition
+typedef NativeInitializeEdition = ffi.Int32 Function(
+  ffi.Int32 edition,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for getting current edition
+typedef NativeGetEdition = ffi.Int32 Function(
+  ffi.Pointer<ffi.Int32> editionOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for checking if edition is initialized
+typedef NativeIsEditionInitialized = ffi.Int32 Function();
+
+/// Native function signature for getting edition info as JSON
+typedef NativeGetEditionInfo = ffi.Int32 Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> infoOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for verifying algorithm is permitted
+typedef NativeVerifyAlgorithmPermitted = ffi.Int32 Function(
+  ffi.Int32 algorithmId,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Native function signature for verifying server edition compatibility
+typedef NativeVerifyServerEdition = ffi.Int32 Function(
+  ffi.Int32 clientEdition,
+  ffi.Int32 serverEdition,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for initializing edition
+typedef DartInitializeEdition = int Function(
+  int edition,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for getting current edition
+typedef DartGetEdition = int Function(
+  ffi.Pointer<ffi.Int32> editionOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for checking if edition is initialized
+typedef DartIsEditionInitialized = int Function();
+
+/// Dart function signature for getting edition info as JSON
+typedef DartGetEditionInfo = int Function(
+  ffi.Pointer<ffi.Pointer<ffi.Char>> infoOut,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for verifying algorithm is permitted
+typedef DartVerifyAlgorithmPermitted = int Function(
+  int algorithmId,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+
+/// Dart function signature for verifying server edition compatibility
+typedef DartVerifyServerEdition = int Function(
+  int clientEdition,
+  int serverEdition,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> errorMsgOut,
+);
+

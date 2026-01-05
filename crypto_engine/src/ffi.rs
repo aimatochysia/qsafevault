@@ -1,5 +1,10 @@
 // FFI layer: C ABI for Flutter integration
 // All functions return status codes and use out-parameters for data
+//
+// EDITION SYSTEM:
+// Edition MUST be initialized before any cryptographic operations.
+// The Edition determines the CryptoPolicy (PQAllowed vs FipsOnly).
+// Enterprise mode enforces FIPS-only algorithms and requires external HSM.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
@@ -12,12 +17,21 @@ use crate::hybrid_kem::{HybridKeypair, HybridCiphertext, encapsulate as hybrid_e
 use crate::symmetric::{SymmetricKey, EncryptedData, encrypt, decrypt};
 use crate::sealed_storage::{SealedBlob, AlgorithmId};
 use crate::platform_keystore::PlatformKeystore;
+use crate::edition::{Edition, Algorithm, EditionError, get_edition, initialize_edition, is_initialized, enforce_algorithm};
 
 // Status codes
 pub const STATUS_OK: c_int = 0;
 pub const STATUS_ERROR: c_int = -1;
 pub const STATUS_INVALID_PARAM: c_int = -2;
 pub const STATUS_NOT_FOUND: c_int = -3;
+// Edition-specific status codes
+pub const STATUS_EDITION_NOT_INITIALIZED: c_int = -10;
+pub const STATUS_EDITION_ALREADY_INITIALIZED: c_int = -11;
+pub const STATUS_FIPS_VIOLATION: c_int = -20;
+pub const STATUS_PQ_DISABLED: c_int = -21;
+pub const STATUS_HSM_REQUIRED: c_int = -22;
+pub const STATUS_SOFTHSM_PROHIBITED: c_int = -23;
+pub const STATUS_SERVER_EDITION_MISMATCH: c_int = -30;
 
 // Global handle storage
 lazy_static::lazy_static! {
@@ -32,8 +46,282 @@ fn next_handle() -> u64 {
     NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
 }
 
+// =============================================================================
+// Edition System FFI Functions
+// =============================================================================
+
+/// Convert EditionError to status code
+fn edition_error_to_status(error: &EditionError) -> c_int {
+    match error {
+        EditionError::AlreadyInitialized => STATUS_EDITION_ALREADY_INITIALIZED,
+        EditionError::NotInitialized => STATUS_EDITION_NOT_INITIALIZED,
+        EditionError::NonFipsAlgorithmProhibited(_) => STATUS_FIPS_VIOLATION,
+        EditionError::PostQuantumDisabled => STATUS_PQ_DISABLED,
+        EditionError::SoftHsmProhibited => STATUS_SOFTHSM_PROHIBITED,
+        EditionError::LocalKeyGenerationProhibited => STATUS_HSM_REQUIRED,
+        EditionError::ExternalHsmRequired => STATUS_HSM_REQUIRED,
+        EditionError::HsmNotFipsValidated => STATUS_FIPS_VIOLATION,
+        EditionError::ServerEditionMismatch { .. } => STATUS_SERVER_EDITION_MISMATCH,
+        EditionError::ServerMissingEnterpriseFeatures(_) => STATUS_SERVER_EDITION_MISMATCH,
+        EditionError::ConfigurationError(_) => STATUS_ERROR,
+    }
+}
+
+/// Initialize the crypto engine with a specific Edition
+/// This MUST be called before any cryptographic operations
+/// Edition values: 0 = Consumer, 1 = Enterprise
+/// 
+/// ENTERPRISE MODE REQUIREMENTS:
+/// - FIPS-only algorithms will be enforced
+/// - Post-quantum algorithms are DISABLED
+/// - External HSM is REQUIRED for root key operations
+/// - SoftHSM is PROHIBITED
+///
+/// Returns: STATUS_OK on success, STATUS_EDITION_ALREADY_INITIALIZED if called twice
+#[no_mangle]
+pub extern "C" fn pqcrypto_initialize_edition(
+    edition: c_int,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    let ed = match edition {
+        0 => Edition::Consumer,
+        1 => Edition::Enterprise,
+        _ => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new("Invalid edition value. Use 0 for Consumer, 1 for Enterprise.") {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            return STATUS_INVALID_PARAM;
+        }
+    };
+
+    match initialize_edition(ed) {
+        Ok(()) => STATUS_OK,
+        Err(e) => {
+            let status = edition_error_to_status(&e);
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e.to_string()) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            status
+        }
+    }
+}
+
+/// Get the current Edition
+/// Returns: 0 = Consumer, 1 = Enterprise, -10 = Not initialized
+#[no_mangle]
+pub extern "C" fn pqcrypto_get_edition(
+    edition_out: *mut c_int,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if edition_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match get_edition() {
+        Ok(ed) => {
+            unsafe {
+                *edition_out = match ed {
+                    Edition::Consumer => 0,
+                    Edition::Enterprise => 1,
+                };
+            }
+            STATUS_OK
+        }
+        Err(e) => {
+            let status = edition_error_to_status(&e);
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e.to_string()) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            status
+        }
+    }
+}
+
+/// Check if the Edition has been initialized
+/// Returns: 1 if initialized, 0 if not
+#[no_mangle]
+pub extern "C" fn pqcrypto_is_edition_initialized() -> c_int {
+    if is_initialized() { 1 } else { 0 }
+}
+
+/// Get Edition information as JSON string
+/// Returns JSON with: edition, crypto_policy, is_enterprise, pq_allowed, fips_only
+#[no_mangle]
+pub extern "C" fn pqcrypto_get_edition_info(
+    info_out: *mut *mut c_char,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if info_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match get_edition() {
+        Ok(ed) => {
+            let policy = ed.crypto_policy();
+            let info = format!(
+                r#"{{"edition":"{}","crypto_policy":"{}","is_enterprise":{},"pq_allowed":{},"fips_only":{}}}"#,
+                match ed {
+                    Edition::Consumer => "Consumer",
+                    Edition::Enterprise => "Enterprise",
+                },
+                match policy {
+                    crate::edition::CryptoPolicy::PQAllowed => "PQAllowed",
+                    crate::edition::CryptoPolicy::FipsOnly => "FipsOnly",
+                },
+                ed == Edition::Enterprise,
+                policy == crate::edition::CryptoPolicy::PQAllowed,
+                policy == crate::edition::CryptoPolicy::FipsOnly,
+            );
+
+            if let Ok(c_str) = CString::new(info) {
+                unsafe { *info_out = c_str.into_raw(); }
+                STATUS_OK
+            } else {
+                STATUS_ERROR
+            }
+        }
+        Err(e) => {
+            let status = edition_error_to_status(&e);
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e.to_string()) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            status
+        }
+    }
+}
+
+/// Verify that an algorithm is permitted under the current Edition policy
+/// Algorithm IDs:
+///   FIPS: 0=AES256GCM, 1=SHA256, 2=SHA384, 3=HKDF_SHA256, 4=PBKDF2_HMAC_SHA256
+///   Non-FIPS: 10=ML_KEM_768, 11=DILITHIUM3, 12=X25519, 13=SHA3_256, 14=HKDF_SHA3_256, 15=ARGON2ID
+#[no_mangle]
+pub extern "C" fn pqcrypto_verify_algorithm_permitted(
+    algorithm_id: c_int,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    let algorithm = match algorithm_id {
+        // FIPS-approved
+        0 => Algorithm::Aes256Gcm,
+        1 => Algorithm::Sha256,
+        2 => Algorithm::Sha384,
+        3 => Algorithm::HkdfSha256,
+        4 => Algorithm::Pbkdf2HmacSha256,
+        5 => Algorithm::EcdsaP256,
+        6 => Algorithm::EcdsaP384,
+        7 => Algorithm::RsaOaep,
+        8 => Algorithm::EcdhP256,
+        9 => Algorithm::EcdhP384,
+        // Non-FIPS (Consumer only)
+        10 => Algorithm::MlKem768,
+        11 => Algorithm::Dilithium3,
+        12 => Algorithm::X25519,
+        13 => Algorithm::Sha3_256,
+        14 => Algorithm::HkdfSha3_256,
+        15 => Algorithm::Argon2id,
+        _ => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new("Unknown algorithm ID") {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            return STATUS_INVALID_PARAM;
+        }
+    };
+
+    match enforce_algorithm(algorithm) {
+        Ok(()) => STATUS_OK,
+        Err(e) => {
+            let status = edition_error_to_status(&e);
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e.to_string()) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            status
+        }
+    }
+}
+
+/// Verify server Edition compatibility
+/// Client edition: 0 = Consumer, 1 = Enterprise
+/// Server edition: 0 = Consumer, 1 = Enterprise
+/// Returns STATUS_OK if compatible, STATUS_SERVER_EDITION_MISMATCH if not
+#[no_mangle]
+pub extern "C" fn pqcrypto_verify_server_edition(
+    client_edition: c_int,
+    server_edition: c_int,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    let client = match client_edition {
+        0 => Edition::Consumer,
+        1 => Edition::Enterprise,
+        _ => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new("Invalid client edition value") {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            return STATUS_INVALID_PARAM;
+        }
+    };
+
+    let server = match server_edition {
+        0 => Edition::Consumer,
+        1 => Edition::Enterprise,
+        _ => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new("Invalid server edition value") {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            return STATUS_INVALID_PARAM;
+        }
+    };
+
+    match client.verify_server_edition(server) {
+        Ok(()) => STATUS_OK,
+        Err(e) => {
+            let status = edition_error_to_status(&e);
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e.to_string()) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            status
+        }
+    }
+}
+
+// =============================================================================
+// Edition-Aware Helper Functions
+// =============================================================================
+
+/// Check edition and enforce ML-KEM 768 algorithm policy before hybrid operations
+/// This verifies that the ML-KEM 768 (Kyber) post-quantum KEM algorithm is permitted.
+/// Used by hybrid encryption/decryption and keypair generation functions.
+fn require_hybrid_pq_algorithms() -> Result<(), String> {
+    // Hybrid operations use ML-KEM 768 + X25519
+    // Both are non-FIPS, but we check ML-KEM as the primary PQ algorithm
+    // X25519 would also fail in Enterprise mode via the same policy
+    match enforce_algorithm(Algorithm::MlKem768) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Generate a new hybrid keypair (PQC + Classical)
 /// Returns handle to keypair, public keys written to out parameters
+/// 
+/// NOTE: This function uses post-quantum algorithms (ML-KEM 768, X25519)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_generate_hybrid_keypair(
     keypair_handle_out: *mut u64,
@@ -45,6 +333,16 @@ pub extern "C" fn pqcrypto_generate_hybrid_keypair(
     if keypair_handle_out.is_null() || pqc_public_key_out.is_null() 
         || pqc_public_key_len_out.is_null() || classical_public_key_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - PQ algorithms required
+    if let Err(e) = require_hybrid_pq_algorithms() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -95,6 +393,9 @@ pub extern "C" fn pqcrypto_generate_hybrid_keypair(
 
 /// Hybrid encrypt a master key
 /// Encapsulates to public keys, then wraps the master key with the shared secret
+/// 
+/// NOTE: This function uses post-quantum algorithms (ML-KEM 768, X25519)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
     pqc_public_key: *const u8,
@@ -109,6 +410,16 @@ pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
         || master_key.is_null() || sealed_blob_out.is_null() 
         || sealed_blob_len_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - PQ algorithms required
+    if let Err(e) = require_hybrid_pq_algorithms() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -168,6 +479,9 @@ pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
 
 /// Hybrid decrypt a master key
 /// Decapsulates ciphertext with keypair, then unwraps the master key
+/// 
+/// NOTE: This function uses post-quantum algorithms (ML-KEM 768, X25519)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_hybrid_decrypt_master_key(
     keypair_handle: u64,
@@ -178,6 +492,16 @@ pub extern "C" fn pqcrypto_hybrid_decrypt_master_key(
 ) -> c_int {
     if sealed_blob.is_null() || master_key_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - PQ algorithms required
+    if let Err(e) = require_hybrid_pq_algorithms() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -751,8 +1075,19 @@ lazy_static::lazy_static! {
     static ref SIGNING_KEYPAIR_HANDLES: Mutex<HashMap<u64, PqcSigningKeypair>> = Mutex::new(HashMap::new());
 }
 
+/// Helper to enforce Dilithium3 algorithm policy
+fn require_dilithium() -> Result<(), String> {
+    match enforce_algorithm(Algorithm::Dilithium3) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Generate a new Dilithium3 signing keypair
 /// Returns handle to keypair, public key written to out parameter
+/// 
+/// NOTE: This function uses post-quantum algorithm (Dilithium3)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_generate_signing_keypair(
     keypair_handle_out: *mut u64,
@@ -762,6 +1097,16 @@ pub extern "C" fn pqcrypto_generate_signing_keypair(
 ) -> c_int {
     if keypair_handle_out.is_null() || public_key_out.is_null() || public_key_len_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - Dilithium3 is a PQ algorithm
+    if let Err(e) = require_dilithium() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -807,6 +1152,9 @@ pub extern "C" fn pqcrypto_generate_signing_keypair(
 
 /// Sign a message using Dilithium3
 /// Returns detached signature
+/// 
+/// NOTE: This function uses post-quantum algorithm (Dilithium3)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_sign_message(
     keypair_handle: u64,
@@ -818,6 +1166,16 @@ pub extern "C" fn pqcrypto_sign_message(
 ) -> c_int {
     if message.is_null() || signature_out.is_null() || signature_len_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - Dilithium3 is a PQ algorithm
+    if let Err(e) = require_dilithium() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -865,6 +1223,9 @@ pub extern "C" fn pqcrypto_sign_message(
 
 /// Verify a Dilithium3 signature
 /// Returns STATUS_OK if valid, STATUS_ERROR if invalid
+/// 
+/// NOTE: This function uses post-quantum algorithm (Dilithium3)
+/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
 #[no_mangle]
 pub extern "C" fn pqcrypto_verify_signature(
     public_key: *const u8,
@@ -878,6 +1239,16 @@ pub extern "C" fn pqcrypto_verify_signature(
 ) -> c_int {
     if public_key.is_null() || message.is_null() || signature.is_null() || valid_out.is_null() {
         return STATUS_INVALID_PARAM;
+    }
+
+    // Enforce edition policy - Dilithium3 is a PQ algorithm
+    if let Err(e) = require_dilithium() {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new(e) {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| -> Result<(), String> {

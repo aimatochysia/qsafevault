@@ -3,6 +3,85 @@
 ## Overview
 This document describes the **fully post-quantum** cryptographic backend implemented in Rust for the QSafeVault password manager. **All cryptographic operations are post-quantum safe**, with no classical-only algorithms remaining in security-critical paths.
 
+## Edition System
+
+QSafeVault supports two explicit product modes: **Consumer Grade** and **Enterprise Grade**.
+
+### Core Principles
+
+- **All editions are open source** - no closed components
+- **No account database** - server remains zero-knowledge
+- **All vault data is local** - secrets live on user devices only
+- **Server never stores plaintext or keys** - zero-knowledge design
+
+### Edition Definitions
+
+| Edition | Crypto Policy | Key Provider | HSM Requirement | Post-Quantum |
+|---------|--------------|--------------|-----------------|--------------|
+| Consumer | PQAllowed | Local/TPM/SoftHSM | Optional | ✅ Enabled |
+| Enterprise | FipsOnly | External HSM | Required | ❌ Disabled |
+
+### Consumer Grade
+
+Consumer mode is the default, offering post-quantum security with flexibility:
+
+- **Post-quantum algorithms**: ML-KEM 768, Dilithium3 (enabled)
+- **Key providers**: Local software, TPM, Secure Enclave, SoftHSM (all allowed)
+- **Deployment**: Public or managed hosting allowed
+- **Trust model**: Device-centric
+
+### Enterprise Grade
+
+Enterprise mode enforces FIPS-only cryptography for regulated environments:
+
+- **FIPS-only algorithms**: AES-256-GCM, SHA-256/384, HKDF-SHA256, PBKDF2
+- **Post-quantum**: DISABLED (until FIPS-approved)
+- **Key providers**: External HSM REQUIRED, SoftHSM PROHIBITED
+- **Deployment**: Self-hosted ONLY
+- **Configuration**: Explicit acknowledgment required
+
+### Security Boundary
+
+**Flutter is NOT a security boundary.** The Rust FFI layer is the sole enforcement point:
+
+- All algorithm selection happens in Rust
+- All key generation and storage happens in Rust
+- All policy enforcement happens in Rust
+- Flutter treats Rust errors as FATAL in Enterprise mode
+
+### Edition Configuration
+
+**Flutter (build-time):**
+```bash
+flutter run --dart-define=QSAFEVAULT_EDITION=enterprise
+```
+
+**Rust FFI (initialization):**
+```rust
+// Called at app startup
+pqcrypto_initialize_edition(1); // 0=Consumer, 1=Enterprise
+```
+
+**Server (environment):**
+```bash
+export QSAFEVAULT_EDITION=enterprise
+export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
+```
+
+### Algorithm Enforcement
+
+| Algorithm | Consumer | Enterprise |
+|-----------|----------|------------|
+| AES-256-GCM | ✅ | ✅ |
+| SHA-256/384 | ✅ | ✅ |
+| HKDF-SHA256 | ✅ | ✅ |
+| PBKDF2-HMAC-SHA256 | ✅ | ✅ |
+| ML-KEM 768 (Kyber) | ✅ | ❌ PROHIBITED |
+| Dilithium3 | ✅ | ❌ PROHIBITED |
+| X25519 | ✅ | ❌ PROHIBITED |
+| SHA3-256 | ✅ | ❌ PROHIBITED |
+| Argon2id | ✅ | ⚠️ Policy-dependent |
+
 ## Post-Quantum Algorithm Summary
 
 | Function | Algorithm | Standard | Security Level |
@@ -21,30 +100,48 @@ The Rust backend (`crypto_engine/`) provides all cryptographic operations throug
 
 #### Core Modules
 
-**pqc_kem.rs** - Post-Quantum Key Encapsulation
+**edition.rs** - Edition System and Policy Enforcement
+- Defines Edition enum (Consumer, Enterprise)
+- Defines CryptoPolicy enum (PQAllowed, FipsOnly)
+- Edition → CryptoPolicy mapping
+- Algorithm permission checking
+- Key provider permission checking
+- Server edition verification
+
+**key_provider.rs** - Edition-Specific Key Management
+- KeyProvider trait for root key operations
+- ConsumerKeyProvider: Local generation, TPM/SoftHSM support
+- EnterpriseKeyProvider: External HSM required, FIPS-validated only
+- Key material zeroization on drop
+
+**pqc_kem.rs** - Post-Quantum Key Encapsulation (Consumer only)
 - Implements Kyber ML-KEM 768 (NIST standardized post-quantum KEM)
 - Key generation, encapsulation, and decapsulation
 - Provides quantum-resistant key establishment
 - 2400-byte public keys, 3168-byte ciphertexts
+- ⚠️ PROHIBITED in Enterprise mode
 
-**pqc_signature.rs** - Post-Quantum Digital Signatures
+**pqc_signature.rs** - Post-Quantum Digital Signatures (Consumer only)
 - Implements Dilithium3 (NIST standardized post-quantum signatures)
 - Key generation, signing, and verification
 - Device identity and sync authentication
 - 1952-byte public keys, 3293-byte signatures
+- ⚠️ PROHIBITED in Enterprise mode
 
 **classical_kem.rs** - Classical Cryptography (Hybrid Mode)
 - Implements X25519 Elliptic Curve Diffie-Hellman
 - Used in hybrid mode combined with PQC for defense-in-depth
 - Provides classical ECDH key agreement as backup
+- ⚠️ PROHIBITED in Enterprise mode (not FIPS-approved)
 
-**hybrid_kem.rs** - Hybrid Key Establishment
+**hybrid_kem.rs** - Hybrid Key Establishment (Consumer only)
 - Combines PQC (Kyber) + Classical (X25519) using HKDF-SHA3
 - Derives a single shared secret from both key establishment mechanisms
 - Ensures security even if one mechanism is broken (belt-and-suspenders)
+- ⚠️ PROHIBITED in Enterprise mode
 
 **symmetric.rs** - Symmetric Encryption
-- AES-256-GCM authenticated encryption
+- AES-256-GCM authenticated encryption (FIPS-approved)
 - Random 96-bit nonce generation per encryption (unique nonces guaranteed)
 - 128-bit authentication tag for integrity
 - Authenticated encryption with associated data (AEAD)

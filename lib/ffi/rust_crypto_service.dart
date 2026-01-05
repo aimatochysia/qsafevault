@@ -2,9 +2,15 @@ import 'dart:ffi' as ffi;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'crypto_bindings.dart';
+import '../config/edition_config.dart';
 
 /// Rust FFI Crypto Service
 /// All cryptographic operations go through the Rust backend
+/// 
+/// EDITION SYSTEM:
+/// Edition MUST be initialized before any cryptographic operations.
+/// Use initializeEdition() before calling any other methods.
+/// Enterprise mode enforces FIPS-only algorithms and requires external HSM.
 class RustCryptoService {
   late final ffi.DynamicLibrary _lib;
   late final DartGenerateKeypair _generateKeypair;
@@ -19,6 +25,14 @@ class RustCryptoService {
   late final DartFreeString _freeString;
   late final DartGetBackendInfo _getBackendInfo;
   late final DartInitLogging _initLogging;
+  
+  // Edition functions
+  late final DartInitializeEdition _initializeEdition;
+  late final DartGetEdition _getEdition;
+  late final DartIsEditionInitialized _isEditionInitialized;
+  late final DartGetEditionInfo _getEditionInfo;
+  late final DartVerifyAlgorithmPermitted _verifyAlgorithmPermitted;
+  late final DartVerifyServerEdition _verifyServerEdition;
 
   RustCryptoService() {
     _lib = loadCryptoLibrary();
@@ -70,9 +84,174 @@ class RustCryptoService {
     _initLogging = _lib
         .lookup<ffi.NativeFunction<NativeInitLogging>>('pqcrypto_init_logging')
         .asFunction();
+    
+    // Initialize edition functions
+    _initializeEdition = _lib
+        .lookup<ffi.NativeFunction<NativeInitializeEdition>>('pqcrypto_initialize_edition')
+        .asFunction();
+    
+    _getEdition = _lib
+        .lookup<ffi.NativeFunction<NativeGetEdition>>('pqcrypto_get_edition')
+        .asFunction();
+    
+    _isEditionInitialized = _lib
+        .lookup<ffi.NativeFunction<NativeIsEditionInitialized>>('pqcrypto_is_edition_initialized')
+        .asFunction();
+    
+    _getEditionInfo = _lib
+        .lookup<ffi.NativeFunction<NativeGetEditionInfo>>('pqcrypto_get_edition_info')
+        .asFunction();
+    
+    _verifyAlgorithmPermitted = _lib
+        .lookup<ffi.NativeFunction<NativeVerifyAlgorithmPermitted>>('pqcrypto_verify_algorithm_permitted')
+        .asFunction();
+    
+    _verifyServerEdition = _lib
+        .lookup<ffi.NativeFunction<NativeVerifyServerEdition>>('pqcrypto_verify_server_edition')
+        .asFunction();
   }
 
-  /// Generate a new hybrid keypair
+  // ==========================================================================
+  // Edition System Methods
+  // ==========================================================================
+
+  /// Initialize the edition in the Rust crypto engine
+  /// This MUST be called before any cryptographic operations
+  /// 
+  /// Edition values: 0 = Consumer, 1 = Enterprise
+  /// 
+  /// Throws [EditionException] if initialization fails
+  void initializeEdition(EditionConfig config) {
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _initializeEdition(config.ffiValue, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw EditionException(status, error);
+      }
+      
+      // Also initialize the Dart-side global edition
+      if (!GlobalEdition.isInitialized) {
+        GlobalEdition.initialize(config);
+      }
+    } finally {
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Get the current edition from the Rust crypto engine
+  /// Returns the EditionConfig
+  EditionConfig getEdition() {
+    final editionPtr = calloc<ffi.Int32>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _getEdition(editionPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw EditionException(status, error);
+      }
+
+      return EditionConfig.fromFfiValue(editionPtr.value);
+    } finally {
+      calloc.free(editionPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Check if the edition has been initialized in Rust
+  bool isEditionInitialized() {
+    return _isEditionInitialized() == 1;
+  }
+
+  /// Get edition information as JSON string
+  /// Returns JSON with: edition, crypto_policy, is_enterprise, pq_allowed, fips_only
+  String getEditionInfo() {
+    final infoPtr = calloc<ffi.Pointer<ffi.Char>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _getEditionInfo(infoPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw EditionException(status, error);
+      }
+
+      if (infoPtr.value != ffi.nullptr) {
+        final info = infoPtr.value.cast<Utf8>().toDartString();
+        _freeString(infoPtr.value);
+        return info;
+      }
+      return '{}';
+    } finally {
+      calloc.free(infoPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Verify that an algorithm is permitted under current edition policy
+  /// 
+  /// Algorithm IDs:
+  ///   FIPS: 0=AES256GCM, 1=SHA256, 2=SHA384, 3=HKDF_SHA256, 4=PBKDF2_HMAC_SHA256
+  ///   Non-FIPS: 10=ML_KEM_768, 11=DILITHIUM3, 12=X25519, 13=SHA3_256, 14=HKDF_SHA3_256, 15=ARGON2ID
+  /// 
+  /// Throws [EditionException] if algorithm is not permitted
+  void verifyAlgorithmPermitted(int algorithmId) {
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _verifyAlgorithmPermitted(algorithmId, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw EditionException(status, error);
+      }
+    } finally {
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// Verify server edition compatibility
+  /// Enterprise clients cannot connect to Consumer servers
+  /// 
+  /// Throws [EditionException] if editions are incompatible
+  void verifyServerEdition(EditionConfig clientEdition, EditionConfig serverEdition) {
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      final status = _verifyServerEdition(
+        clientEdition.ffiValue,
+        serverEdition.ffiValue,
+        errorPtr,
+      );
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw EditionException(status, error);
+      }
+    } finally {
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  // ==========================================================================
+  // Cryptographic Operations
+  // ==========================================================================
+
+  /// Generate a new hybrid keypair (PQC + Classical)
+  /// 
+  /// NOTE: This uses post-quantum algorithms (ML-KEM 768, X25519)
+  /// It is PROHIBITED in Enterprise mode and will throw [EditionException]
+  /// with status STATUS_PQ_DISABLED
   ({int handle, Uint8List pqcPublicKey, Uint8List classicalPublicKey}) generateHybridKeypair() {
     final handlePtr = calloc<ffi.Uint64>();
     final pqcPkPtr = calloc<ffi.Pointer<ffi.Uint8>>();
