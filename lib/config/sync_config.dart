@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'edition_config.dart';
 
 class SyncConfig {
   final String baseUrl;
@@ -14,6 +15,9 @@ class SyncConfig {
   final String transport;
   final int torLocalSyncPort;
   final int torDefaultSocksPort;
+  
+  /// Whether sync is disabled (Enterprise mode without custom URL)
+  final bool syncDisabled;
 
   const SyncConfig({
     required this.baseUrl,
@@ -28,13 +32,44 @@ class SyncConfig {
     this.transport = 'tor',
     this.torLocalSyncPort = 5000,
     this.torDefaultSocksPort = 9050,
+    this.syncDisabled = false,
   });
 
+  /// Default consumer sync URL (public relay)
+  static const String _consumerDefaultUrl = 'https://qsafevault-server.vercel.app';
+  
+  /// Placeholder for Enterprise - indicates no URL was configured
+  static const String _enterpriseNoUrl = '';
+
   static SyncConfig defaults() {
-    final base = const String.fromEnvironment(
+    final edition = GlobalEdition.configOrDefault;
+    
+    // Get user-provided URL from environment
+    final userProvidedUrl = const String.fromEnvironment(
       'QSV_SYNC_BASEURL',
-      defaultValue: 'https://qsafevault-server.vercel.app',
-    );
+      defaultValue: '',
+    ).trim();
+    
+    // Determine base URL based on edition
+    // - Consumer: Use user URL if provided, otherwise default to public relay
+    // - Enterprise: MUST provide their own URL, sync disabled if not provided
+    String baseUrl;
+    bool syncDisabled = false;
+    
+    if (edition.isEnterprise) {
+      if (userProvidedUrl.isEmpty) {
+        // Enterprise mode requires explicit backend URL
+        // Sync is disabled until user configures their own server
+        baseUrl = _enterpriseNoUrl;
+        syncDisabled = true;
+      } else {
+        baseUrl = userProvidedUrl;
+      }
+    } else {
+      // Consumer mode: use provided URL or fall back to public relay
+      baseUrl = userProvidedUrl.isNotEmpty ? userProvidedUrl : _consumerDefaultUrl;
+    }
+    
     final turnUrls = const String.fromEnvironment('QSV_TURN_URLS', defaultValue: '')
         .split(',')
         .map((s) => s.trim())
@@ -54,7 +89,7 @@ class SyncConfig {
     }
 
     return SyncConfig(
-      baseUrl: base,
+      baseUrl: baseUrl,
       turnUrls: turnUrls,
       turnUsername: turnUser.isEmpty ? null : turnUser,
       turnCredential: turnCred.isEmpty ? null : turnCred,
@@ -62,6 +97,7 @@ class SyncConfig {
       transport: (transport == 'webrtc' || transport == 'tor') ? transport : 'tor',
       torLocalSyncPort: _parsePort(localPortRaw, 5000),
       torDefaultSocksPort: _parsePort(socksPortRaw, 9050),
+      syncDisabled: syncDisabled,
     );
   }
 }
