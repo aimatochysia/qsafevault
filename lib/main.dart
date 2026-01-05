@@ -5,8 +5,17 @@ import '/services/storage_service.dart';
 import 'platforms/windows.dart';
 import 'dart:io';
 import 'package:qsafevault/services/theme_service.dart';
+import 'package:qsafevault/config/edition_config.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize edition from build-time configuration
+  // Use: flutter run --dart-define=QSAFEVAULT_EDITION=enterprise
+  final editionConfig = EditionConfig.fromEnvironment();
+  GlobalEdition.initialize(editionConfig);
+  debugPrint('QSafeVault starting in ${editionConfig.editionName} mode');
+  
   await ThemeService.instance.init();
   final cryptoService = CryptoService();
   final storageService = StorageService(cryptoService);
