@@ -16,6 +16,42 @@ This vault is **fully post-quantum secure**, protecting against both classical a
 
 **No classical-only cryptography remains** in the security-critical paths.
 
+## 📦 Product Editions
+
+QSafeVault supports two product modes: **Consumer Grade** and **Enterprise Grade**.
+
+| Feature | Consumer | Enterprise |
+|---------|----------|------------|
+| Post-quantum crypto | ✅ Enabled | ❌ Disabled (until FIPS-approved) |
+| FIPS-only mode | ❌ | ✅ Required |
+| Key providers | Local/TPM/SoftHSM | External HSM required |
+| Deployment | Any | Self-hosted only |
+| Open source | ✅ | ✅ |
+| Account database | ❌ None | ❌ None |
+| Vault storage | Local only | Local only |
+
+### Consumer Grade (Default)
+Post-quantum security with flexibility for personal use.
+
+```bash
+flutter run  # Consumer mode is default
+```
+
+### Enterprise Grade
+FIPS-only cryptography for regulated environments.
+
+```bash
+# Flutter app
+flutter run --dart-define=QSAFEVAULT_EDITION=enterprise
+
+# Server
+export QSAFEVAULT_EDITION=enterprise
+export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
+node server.js
+```
+
+**See [CRYPTO_ARCHITECTURE.md](CRYPTO_ARCHITECTURE.md) for complete Edition system documentation.**
+
 Key highlights
 - Local‑only vault; no cloud storage
 - **Post-quantum encryption**: Kyber ML-KEM + AES‑256‑GCM
