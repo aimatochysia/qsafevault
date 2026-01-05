@@ -125,7 +125,7 @@ class CryptoBackendNotifier {
     // Determine backend string
     String backend;
     if (tpm && softhsm) {
-      backend = 'TPM2+SoftHSM';
+      backend = 'TPM2+SoftHSM (dual)';
     } else if (tpm) {
       backend = 'TPM2';
     } else if (softhsm) {
@@ -133,7 +133,7 @@ class CryptoBackendNotifier {
     } else if (platformSecure) {
       backend = 'Secure Enclave';
     } else {
-      backend = 'Software';
+      backend = 'Software (fallback)';
     }
 
     // Build sync info string
@@ -155,16 +155,16 @@ class CryptoBackendNotifier {
     final transport = syncConfig.transport.toUpperCase();
     parts.add(transport);
     
-    // If WebRTC transport, show TURN configuration
+    // If WebRTC transport, show TURN/STUN configuration
     if (syncConfig.transport == 'webrtc') {
       if (syncConfig.turnUrls.isNotEmpty) {
         parts.add('TURN');
         if (syncConfig.turnForceRelay) {
           parts.add('relay-only');
         }
-      } else {
-        parts.add('STUN');
       }
+      // Note: When no TURN is configured, WebRTC uses default Google STUN servers
+      // defined in P2pPeerService. We don't show STUN explicitly to avoid confusion.
     }
     
     // Show relay host (shortened)
