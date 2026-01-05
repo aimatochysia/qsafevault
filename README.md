@@ -235,13 +235,67 @@ CI/CD
 
 Runtime configuration is via --dart-define.
 
+- QSAFEVAULT_EDITION: Product edition (consumer or enterprise)
+  - Example: --dart-define=QSAFEVAULT_EDITION=enterprise
+  - Default: consumer
+  
 - QSV_SYNC_BASEURL: Base URL for the relay server
   - Example: --dart-define=QSV_SYNC_BASEURL=https://your-relay.vercel.app
   - For local development: --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
+  - **Consumer mode**: Defaults to public relay if not set
+  - **Enterprise mode**: Sync disabled until explicitly configured
 
 Notes
 - All HTTP/HTTPS calls are short‑lived; the relay retains chunks for 60s only.
 - Poll settings: httpTimeout≈8s, pollInterval≈800ms, pollMaxWait≈180s.
+
+---
+
+## Running the Backend Server
+
+The backend server provides the relay functionality for device-to-device sync. It stores only encrypted blobs temporarily (60s TTL) and never sees plaintext.
+
+### Local Development
+
+```bash
+# Navigate to server directory
+cd qsafevault-server
+
+# Install dependencies
+npm install
+
+# Start the server
+npm run serve
+# or
+node server.js
+```
+
+The server runs on `http://localhost:3000` by default.
+
+### Connect Flutter App to Local Backend
+
+```bash
+# Consumer mode with local backend
+flutter run --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
+
+# Enterprise mode with local backend
+flutter run --dart-define=QSAFEVAULT_EDITION=enterprise --dart-define=QSV_SYNC_BASEURL=http://localhost:3000
+```
+
+### Running with Vercel (Local Dev Mode)
+
+```bash
+cd qsafevault-server
+npm start  # Uses 'vercel dev'
+```
+
+### Enterprise Server Configuration
+
+```bash
+export QSAFEVAULT_EDITION=enterprise
+export QSAFEVAULT_ENTERPRISE_ACKNOWLEDGED=true
+node server.js
+```
 
 ---
 
@@ -585,9 +639,15 @@ RUN softhsm2-util --init-token --slot 0 --label "QSafeVault" --pin 1234 --so-pin
 - [Done] Post-quantum signatures (Dilithium3) - NIST standardized
 - [Done] Platform secure storage auto-detection (TPM2, SoftHSM, Secure Enclave)
 - [Done] Rust FFI crypto engine for all platforms
+- [Done] Full TPM2/SoftHSM sealing implementation (Rust crypto_engine)
+  - TPM2: Linux (tss-esapi) and Windows (CNG) support
+  - SoftHSM: PKCS#11 integration with non-extractable keys
+  - Dual-sealing: Combined TPM2 + SoftHSM for maximum security
+  - Auto-detection: Best available backend selected automatically
+- [Done] Edition system (Consumer/Enterprise) with backend URL configuration
 - [Planned] macOS/iOS support (in progress)
 - [Planned] Third‑party security audit
-- [Planned] Full TPM2/SoftHSM sealing implementation
+- [Planned] Enterprise external HSM integration (PKCS#11 FIPS-validated HSMs)
 
 ---
 
