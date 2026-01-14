@@ -233,7 +233,7 @@ async function testLatency() {
 // ==================== Multi-User Sync Tests ====================
 
 async function testMultiUserSync() {
-  console.log('Test: Multi-user sync (simulating multiple devices syncing)');
+  console.log('Test: Multi-user sync (sequential operations for serverless compatibility)');
   
   const numUsers = 5;
   const users = [];
@@ -280,7 +280,7 @@ async function testMultiUserSync() {
 }
 
 async function testCrossDeviceSync() {
-  console.log('Test: Cross-device sync (same user on multiple devices)');
+  console.log('Test: Cross-device sync (sequential chunk transfer for serverless compatibility)');
   
   const pin = generateRandomPin();
   const passwordHash = `shared-session-${Date.now()}`;
