@@ -24,6 +24,9 @@ const LIVE_SERVER_URL = process.env.LIVE_SERVER_URL || 'https://qsafevault-serve
 const parsedUrl = new URL(LIVE_SERVER_URL);
 const isHttps = parsedUrl.protocol === 'https:';
 
+// Minimum success rate threshold for load/stress/endurance tests
+const MIN_SUCCESS_RATE = 0.9; // 90%
+
 // ==================== Test Utilities ====================
 
 async function httpRequest(method, path, body = null) {
@@ -384,8 +387,9 @@ async function testRapidFireRequests() {
   
   const promises = [];
   const startTime = Date.now();
+  const numRequests = 20;
   
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < numRequests; i++) {
     promises.push(
       httpRequest('POST', '/api/relay', {
         action: 'send',
@@ -402,9 +406,10 @@ async function testRapidFireRequests() {
   const elapsed = Date.now() - startTime;
   
   const successful = results.filter(r => r.status === 200 && r.body.status === 'waiting').length;
-  assertTruthy(successful >= 18, `At least 18/20 rapid requests should succeed (got ${successful})`);
+  const minRequired = Math.floor(numRequests * MIN_SUCCESS_RATE);
+  assertTruthy(successful >= minRequired, `At least ${minRequired}/${numRequests} rapid requests should succeed (got ${successful})`);
   
-  console.log(`✓ ${successful}/20 rapid-fire requests completed in ${elapsed}ms`);
+  console.log(`✓ ${successful}/${numRequests} rapid-fire requests completed in ${elapsed}ms`);
 }
 
 // ==================== Endurance Tests ====================
@@ -458,8 +463,9 @@ async function testEnduranceSustainedLoad() {
     ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) 
     : 0;
   const successRate = Math.round((successCount / requestCount) * 100);
+  const minSuccessRate = Math.round(MIN_SUCCESS_RATE * 100);
   
-  assertTruthy(successRate >= 90, `Success rate should be at least 90% (got ${successRate}%)`);
+  assertTruthy(successRate >= minSuccessRate, `Success rate should be at least ${minSuccessRate}% (got ${successRate}%)`);
   
   console.log(`✓ Endurance test completed: ${requestCount} requests, ${successRate}% success, avg latency ${avgLatency}ms`);
 }
@@ -503,7 +509,8 @@ async function testEnduranceRepetitiveOperations() {
     }
   }
   
-  assertTruthy(successfulCycles >= cycles - 2, `At least ${cycles - 2}/${cycles} cycles should succeed (got ${successfulCycles})`);
+  const minRequired = Math.floor(cycles * MIN_SUCCESS_RATE);
+  assertTruthy(successfulCycles >= minRequired, `At least ${minRequired}/${cycles} cycles should succeed (got ${successfulCycles})`);
   
   console.log(`✓ Repetitive operations: ${successfulCycles}/${cycles} cycles successful`);
 }
@@ -681,7 +688,8 @@ async function testStressConcurrentLoad() {
   const elapsed = Date.now() - startTime;
   
   const successful = results.filter(r => r.status === 200).length;
-  assertTruthy(successful >= numOperations - 2, `At least ${numOperations - 2}/${numOperations} should succeed`);
+  const minRequired = Math.floor(numOperations * MIN_SUCCESS_RATE);
+  assertTruthy(successful >= minRequired, `At least ${minRequired}/${numOperations} should succeed`);
   
   console.log(`✓ Stress test: ${successful}/${numOperations} operations in ${elapsed}ms`);
 }
@@ -708,7 +716,8 @@ async function testStressWebRTCSignaling() {
     }
   }
   
-  assertTruthy(peers.length >= numPeers - 1, `At least ${numPeers - 1} peers should register`);
+  const minPeersRequired = Math.floor(numPeers * MIN_SUCCESS_RATE);
+  assertTruthy(peers.length >= minPeersRequired, `At least ${minPeersRequired} peers should register`);
   
   // Send signals between peers
   let signalsSent = 0;
@@ -726,7 +735,9 @@ async function testStressWebRTCSignaling() {
     }
   }
   
-  assertTruthy(signalsSent >= peers.length - 2, 'Most signals should be queued');
+  const expectedSignals = peers.length - 1;
+  const minSignalsRequired = Math.floor(expectedSignals * MIN_SUCCESS_RATE);
+  assertTruthy(signalsSent >= minSignalsRequired, `At least ${minSignalsRequired} signals should be queued`);
   
   console.log(`✓ WebRTC stress: ${peers.length} peers, ${signalsSent} signals`);
 }
