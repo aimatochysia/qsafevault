@@ -106,7 +106,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -195,7 +195,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -250,7 +250,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -335,7 +335,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -385,7 +385,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -438,7 +438,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           ref: main
 
       - name: Set up Flutter
@@ -566,7 +566,7 @@ jobs:
           tag_name: ${{ needs.validate-inputs.outputs.tag }}
           name: QSafeVault ${{ needs.validate-inputs.outputs.tag }}
           body: ${{ env.RELEASE_BODY }}
-          token: ${{ secrets.ORIGIN_PAT }}
+          token: ${{ secrets.PAT_TOKEN }}
           files: |
             release-dist/**/*
           fail_on_unmatched_files: false
