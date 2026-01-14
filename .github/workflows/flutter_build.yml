@@ -172,6 +172,7 @@ jobs:
     name: Build Windows Installer
     runs-on: windows-latest
     needs: build-ubuntu
+    if: ${{ always() && needs.build-ubuntu.result != 'cancelled' }}
     continue-on-error: true
 
     steps:
@@ -262,6 +263,7 @@ jobs:
     name: Build macOS Installer
     runs-on: macos-latest
     needs: build-ubuntu
+    if: ${{ always() && needs.build-ubuntu.result != 'cancelled' }}
     continue-on-error: true
 
     steps:
@@ -311,6 +313,7 @@ jobs:
     name: Build iOS (unsigned .app)
     runs-on: macos-latest
     needs: build-ubuntu
+    if: ${{ always() && needs.build-ubuntu.result != 'cancelled' }}
     continue-on-error: true
     steps:
       - name: Checkout source
@@ -355,6 +358,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: [build-ubuntu, build-windows, build-macos, build-ios]
+    if: ${{ always() && !cancelled() }}
 
     steps:
       - name: Download all artifacts
