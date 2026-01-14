@@ -1,0 +1,79 @@
+name: Sync Server to Separate Repository
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'qsafevault-server/**'
+  workflow_dispatch:
+
+jobs:
+  sync-server-repo:
+    name: Sync qsafevault-server to separate repository
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+
+      - name: Clone target repository
+        run: |
+          git clone https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/aimatochysia/qsafevault-server.git target-repo
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Sync server files
+        run: |
+          # Remove all files from target (except .git)
+          cd target-repo
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cd ..
+          
+          # Copy all files from qsafevault-server to target
+          cp -r qsafevault-server/* target-repo/
+          cp -r qsafevault-server/.[!.]* target-repo/ 2>/dev/null || true
+          
+          # Show what will be committed
+          cd target-repo
+          git status
+
+      - name: Commit and push changes
+        run: |
+          cd target-repo
+          
+          # Check if there are any changes
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          # Stage all changes
+          git add -A
+          
+          # Get the commit message from source repo
+          SOURCE_COMMIT="${{ github.sha }}"
+          SOURCE_MSG=$(git -C .. log -1 --format="%s" $SOURCE_COMMIT)
+          
+          # Commit with reference to source
+          git commit -m "Sync from qsafevault: $SOURCE_MSG" -m "Source commit: $SOURCE_COMMIT"
+          
+          # Push to target repository
+          git push origin main
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Sync summary
+        run: |
+          echo "## Server Sync Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Source:** \`aimatochysia/qsafevault/qsafevault-server\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`aimatochysia/qsafevault-server\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
