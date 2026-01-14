@@ -5,7 +5,9 @@
   "scripts": {
     "start": "vercel dev",
     "serve": "node server.js",
-    "test": "node test/relay-test.js"
+    "test": "node test/relay-test.js",
+    "test:comprehensive": "node test/comprehensive-test.js",
+    "test:all": "npm run test && npm run test:comprehensive"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +17,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "express": "^5.2.1",
     "uuid": "^9.0.1"
   }
 }
