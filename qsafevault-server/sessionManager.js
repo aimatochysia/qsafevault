@@ -97,7 +97,6 @@ async function writeStorage(key, data) {
     const blob = getBlobModule();
     const json = JSON.stringify(data);
     await blob.put(key, json, {
-      access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json',
     });
@@ -137,7 +136,8 @@ async function purgeExpired() {
           if (response.ok) {
             const data = await response.json();
             if (data.expires && data.expires < cutoff) {
-              await blob.del(b.url);
+              // Use pathname for deletion, not the full URL
+              await blob.del(b.pathname);
             }
           }
         } catch (e) {
