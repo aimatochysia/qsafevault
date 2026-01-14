@@ -1,4 +1,4 @@
-name: Sync Server to Separate Repository
+name: Sync Server to server deployment Repo
 
 on:
   push:
