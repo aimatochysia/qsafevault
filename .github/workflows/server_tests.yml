@@ -95,4 +95,11 @@ jobs:
           echo "## Live Server Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** \`${{ env.LIVE_SERVER_URL }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Live server API tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tests Executed:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Basic API tests (health, latency, relay, WebRTC)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Multi-user sync tests (multiple devices syncing)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Concurrent session tests (parallel operations)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Security validation tests (input validation, session isolation)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Endurance tests (sustained load, repetitive operations)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Stress tests (concurrent load, WebRTC signaling)" >> $GITHUB_STEP_SUMMARY
