@@ -107,6 +107,7 @@ async function writeStorage(key, data) {
     const blob = getBlobModule();
     const json = JSON.stringify(data);
     await blob.put(key, json, {
+      access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json',
     });
