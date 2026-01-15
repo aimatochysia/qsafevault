@@ -17,6 +17,12 @@
 const SIGNAL_TTL_MS = 30000;
 const CHUNK_TTL_MS = 60000;
 
+// Optimistic concurrency control constants
+const MAX_PUSH_RETRIES = 5;
+const INITIAL_BACKOFF_MS = 50;
+const MAX_BACKOFF_MS = 500;
+const JITTER_MS = 50;
+
 function now() { return Date.now(); }
 
 // ==================== Storage Backend ====================
@@ -273,9 +279,8 @@ async function pushChunk({ pin, passwordHash, chunkIndex, totalChunks, data }) {
   }
   
   const key = sessionKey(inviteCode, passwordHash);
-  const maxRetries = 5;
   
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  for (let attempt = 0; attempt < MAX_PUSH_RETRIES; attempt++) {
     // Read current session state
     let sess = await readStorage(key);
     
@@ -300,24 +305,29 @@ async function pushChunk({ pin, passwordHash, chunkIndex, totalChunks, data }) {
     }
     
     // Add the chunk and increment version
-    const previousVersion = sess.version || 0;
+    // Store the expected version for verification
+    const expectedVersion = (sess.version || 0) + 1;
     sess.chunks[chunkIndex] = data;
     sess.lastTouched = now();
     sess.expires = now() + CHUNK_TTL_MS;
-    sess.version = previousVersion + 1;
+    sess.version = expectedVersion;
     
     // Write the updated session
     await writeStorage(key, sess);
     
-    // Verify the write succeeded by re-reading
+    // Verify the write succeeded by re-reading and checking both data and version
     const verifySession = await readStorage(key);
-    if (verifySession && verifySession.chunks[chunkIndex] === data) {
-      // Write succeeded
+    if (verifySession && 
+        verifySession.chunks[chunkIndex] === data && 
+        verifySession.version >= expectedVersion) {
+      // Write succeeded - our chunk is present
+      // Note: version may be higher if another concurrent write also succeeded,
+      // but as long as our chunk is there, we consider it a success
       return { status: 'waiting' };
     }
     
     // Write was overwritten by concurrent request, retry with exponential backoff
-    const backoffMs = Math.min(50 * Math.pow(2, attempt), 500) + Math.random() * 50;
+    const backoffMs = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS) + Math.random() * JITTER_MS;
     await new Promise(r => setTimeout(r, backoffMs));
   }
   
