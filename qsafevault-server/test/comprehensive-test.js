@@ -772,6 +772,80 @@ async function testMemoryPressure() {
   console.log(`✓ Memory pressure test completed (${numPayloads * payloadSize / 1024}KB total)`);
 }
 
+// ==================== Security Middleware Tests ====================
+
+async function testSecurityHeaders() {
+  console.log('Test: Security headers (Helmet)');
+  
+  const response = await httpRequest('GET', '/api/v1/edition');
+  
+  // Check for security headers set by Helmet
+  assertTruthy(
+    response.headers['x-content-type-options'] === 'nosniff',
+    'X-Content-Type-Options header should be set'
+  );
+  assertTruthy(
+    response.headers['x-frame-options'] === 'DENY',
+    'X-Frame-Options header should be set'
+  );
+  assertTruthy(
+    !response.headers['x-powered-by'],
+    'X-Powered-By header should be hidden'
+  );
+  assertTruthy(
+    response.headers['strict-transport-security'],
+    'Strict-Transport-Security header should be set'
+  );
+  
+  console.log('✓ Security headers are properly configured');
+}
+
+async function testCorsHeaders() {
+  console.log('Test: CORS headers');
+  
+  // Test OPTIONS preflight request
+  const preflightResponse = await httpRequest('OPTIONS', '/api/relay');
+  
+  assertTruthy(
+    preflightResponse.headers['access-control-allow-methods'],
+    'Access-Control-Allow-Methods header should be set'
+  );
+  assertTruthy(
+    preflightResponse.headers['access-control-allow-headers'],
+    'Access-Control-Allow-Headers header should be set'
+  );
+  
+  console.log('✓ CORS headers are properly configured');
+}
+
+async function testRateLimitHeaders() {
+  console.log('Test: Rate limit headers');
+  
+  const response = await httpRequest('GET', '/api/v1/edition');
+  
+  assertTruthy(
+    response.headers['x-ratelimit-limit'],
+    'X-RateLimit-Limit header should be set'
+  );
+  assertTruthy(
+    response.headers['x-ratelimit-remaining'],
+    'X-RateLimit-Remaining header should be set'
+  );
+  assertTruthy(
+    response.headers['x-ratelimit-reset'],
+    'X-RateLimit-Reset header should be set'
+  );
+  
+  // Verify values are reasonable
+  const limit = parseInt(response.headers['x-ratelimit-limit'], 10);
+  const remaining = parseInt(response.headers['x-ratelimit-remaining'], 10);
+  
+  assertTruthy(limit > 0, 'Rate limit should be positive');
+  assertTruthy(remaining >= 0 && remaining <= limit, 'Remaining should be within limits');
+  
+  console.log('✓ Rate limit headers are properly configured');
+}
+
 // ==================== Run All Tests ====================
 
 async function runAllTests() {
@@ -794,6 +868,11 @@ async function runAllTests() {
     await testSessionIsolation();
     await testPeerIdSpoofing();
     await testSignalQueueIsolation();
+    
+    console.log('\n--- Security Middleware Tests ---');
+    await testSecurityHeaders();
+    await testCorsHeaders();
+    await testRateLimitHeaders();
     
     console.log('\n--- HTTP API Endpoint Tests ---');
     await testRelayEndpointSend();

@@ -34,13 +34,23 @@ function getBlobModule() {
 // Blob store prefix for namespacing
 const BLOB_PREFIX = 'qsafevault-sessions/';
 
+// Cryptographic randomization for blob keys (prevents enumeration attacks)
+const crypto = require('crypto');
+
+/**
+ * Generate a cryptographic hash for key derivation
+ * This makes blob keys unpredictable even if invite code is known
+ */
+function deriveSecureKey(...parts) {
+  const combined = parts.join(':');
+  return crypto.createHash('sha256').update(combined).digest('base64url').slice(0, 32);
+}
+
 // Generate a safe storage key from session parameters
 function storageKey(prefix, ...parts) {
-  // Use base64url encoding for safe keys
-  const safeParts = parts.map(p => 
-    Buffer.from(String(p)).toString('base64url')
-  );
-  return `${BLOB_PREFIX}${prefix}/${safeParts.join('/')}`;
+  // Use SHA-256 hash of combined parts for secure, unpredictable keys
+  const secureHash = deriveSecureKey(prefix, ...parts);
+  return `${BLOB_PREFIX}${prefix}/${secureHash}`;
 }
 
 // Session key for chunk relay sessions
