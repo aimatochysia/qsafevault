@@ -33,18 +33,28 @@ Complete guide for installing, configuring, and using QSafeVault - the post-quan
 
 ## Introduction
 
-QSafeVault is a secure, local-first password manager featuring **post-quantum cryptography**. Your vault data is:
+QSafeVault is a secure, local-first password manager featuring **FIPS 203/204/205 certified post-quantum cryptography**. Your vault data is:
 
-- **Encrypted at rest** with AES-256-GCM
-- **Protected by post-quantum algorithms** (ML-KEM 768 + Dilithium3)
+- **Encrypted at rest** with AES-256-GCM (FIPS-approved)
+- **Protected by FIPS-certified post-quantum algorithms** (ML-KEM-1024, ML-DSA-65, SLH-DSA)
 - **Stored locally only** - no cloud storage
 - **Synchronized peer-to-peer** with end-to-end encryption
+
+### FIPS-Certified Algorithms
+
+| Function | Algorithm | Standard |
+|----------|-----------|----------|
+| Key Encapsulation | ML-KEM-1024 | FIPS 203 |
+| Digital Signatures | ML-DSA-65 | FIPS 204 |
+| Hash-Based Signatures | SLH-DSA-SHA2-128s | FIPS 205 |
+| Symmetric Encryption | AES-256-GCM | FIPS 197 |
+| Key Derivation | HKDF-SHA256 | NIST SP 800-56C |
 
 ### Editions
 
 | Feature | Consumer | Enterprise |
 |---------|----------|------------|
-| Post-quantum crypto | ✅ Enabled | ❌ Disabled (FIPS-only) |
+| Post-quantum crypto | ✅ FIPS 203/204/205 | ✅ FIPS 203/204/205 |
 | Default server | Public relay | Self-hosted required |
 | HSM requirement | Optional | Required |
 

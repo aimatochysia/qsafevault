@@ -1,12 +1,11 @@
 // Security Tests for QSafeVault Crypto Engine
 // These tests cover vulnerability, penetration, authentication, and data protection scenarios
+// All tests use FIPS-compliant algorithms only
 
 #[cfg(test)]
 mod security_tests {
     use crate::symmetric::{SymmetricKey, EncryptedData, encrypt, decrypt};
-    use crate::hybrid_kem::{HybridKeypair, encapsulate};
-    use crate::pqc_kem::PqcKeypair;
-    use crate::classical_kem::ClassicalKeypair;
+    use crate::pqc_kem::{PqcKeypair, encapsulate};
     use crate::sealed_storage::{SealedBlob, AlgorithmId};
     
     // ============================================================================
@@ -164,29 +163,27 @@ mod security_tests {
     #[test]
     fn test_keypair_uniqueness() {
         // Each keypair generation must produce unique keys
-        let keypair1 = HybridKeypair::generate();
-        let keypair2 = HybridKeypair::generate();
+        let keypair1 = PqcKeypair::generate();
+        let keypair2 = PqcKeypair::generate();
         
-        let (pqc_pk1, classical_pk1) = keypair1.public_keys_bytes();
-        let (pqc_pk2, classical_pk2) = keypair2.public_keys_bytes();
+        let pk1 = keypair1.public_key_bytes();
+        let pk2 = keypair2.public_key_bytes();
         
-        assert_ne!(pqc_pk1, pqc_pk2, "PQC public keys must be unique");
-        assert_ne!(classical_pk1, classical_pk2, "Classical public keys must be unique");
+        assert_ne!(pk1, pk2, "Public keys must be unique");
     }
     
     #[test]
     fn test_shared_secret_correctness() {
         // Verify that shared secrets match between parties
-        let alice = HybridKeypair::generate();
-        let (alice_pqc_pk, alice_classical_pk) = alice.public_keys_bytes();
+        let alice = PqcKeypair::generate();
+        let alice_pk = alice.public_key_bytes();
         
         // Bob encapsulates to Alice
-        let (bob_ss, bob_ct) = encapsulate(&alice_pqc_pk, &alice_classical_pk)
+        let (bob_ss, bob_ct) = encapsulate(&alice_pk)
             .expect("Encapsulation should succeed");
         
         // Alice decapsulates
-        let alice_ss = alice.decapsulate(&bob_ct)
-            .expect("Decapsulation should succeed");
+        let alice_ss = alice.decapsulate(&bob_ct);
         
         assert_eq!(bob_ss.secret, alice_ss.secret, "Shared secrets must match");
     }
@@ -194,24 +191,21 @@ mod security_tests {
     #[test]
     fn test_wrong_private_key_decapsulation_produces_different_secret() {
         // Attempt to decapsulate with wrong private key
-        let alice = HybridKeypair::generate();
-        let eve = HybridKeypair::generate(); // Attacker
+        let alice = PqcKeypair::generate();
+        let eve = PqcKeypair::generate(); // Attacker
         
-        let (alice_pqc_pk, alice_classical_pk) = alice.public_keys_bytes();
+        let alice_pk = alice.public_key_bytes();
         
         // Bob encapsulates to Alice
-        let (bob_ss, bob_ct) = encapsulate(&alice_pqc_pk, &alice_classical_pk)
+        let (bob_ss, bob_ct) = encapsulate(&alice_pk)
             .expect("Encapsulation should succeed");
         
         // Eve (attacker) tries to decapsulate with her private key
-        let eve_result = eve.decapsulate(&bob_ct);
+        let eve_ss = eve.decapsulate(&bob_ct);
         
         // Note: ML-KEM will still produce a shared secret (implicit rejection)
         // but it will be DIFFERENT from Bob's shared secret
-        if let Ok(eve_ss) = eve_result {
-            // The attacker's shared secret must be different
-            assert_ne!(eve_ss.secret, bob_ss.secret, "Attacker's shared secret must differ");
-        }
+        assert_ne!(eve_ss.secret, bob_ss.secret, "Attacker's shared secret must differ");
     }
     
     #[test]
@@ -276,7 +270,7 @@ mod security_tests {
     fn test_sealed_blob_integrity() {
         // Sealed blob must detect tampering
         let blob = SealedBlob::new(
-            AlgorithmId::HybridKemAes256Gcm,
+            AlgorithmId::MlKem1024,
             vec![0x01, 0x02, 0x03, 0x04],
             Some("test-key".to_string()),
         );
@@ -368,15 +362,5 @@ mod security_tests {
         
         // Public key should be correct length for ML-KEM-1024 (FIPS 203)
         assert_eq!(pk.len(), 1568, "ML-KEM-1024 public key should be 1568 bytes");
-    }
-    
-    #[test]
-    fn test_classical_keypair_serialization_integrity() {
-        // Test that classical keypairs serialize correctly
-        let keypair = ClassicalKeypair::generate();
-        let pk = keypair.public_key_bytes();
-        
-        // X25519 public key should be 32 bytes
-        assert_eq!(pk.len(), 32, "X25519 public key should be 32 bytes");
     }
 }

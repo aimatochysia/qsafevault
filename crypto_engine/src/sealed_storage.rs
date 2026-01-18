@@ -8,11 +8,13 @@ pub enum BlobVersion {
     V2, // Multi-backend support
 }
 
-/// Algorithm identifier for sealed blobs
+/// Algorithm identifier for sealed blobs (FIPS-compliant only)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlgorithmId {
-    HybridKemAes256Gcm,
-    Aes256Gcm,
+    MlKem1024,    // FIPS 203: ML-KEM-1024
+    Aes256Gcm,    // FIPS-approved AES-256-GCM
+    MlDsa65,      // FIPS 204: ML-DSA-65
+    SlhDsaSha2128s, // FIPS 205: SLH-DSA-SHA2-128s
 }
 
 /// Backend identifier for sealed blobs
@@ -135,7 +137,8 @@ impl SealedBlob {
     /// Verify the blob algorithm is supported
     pub fn verify_algorithm(&self) -> Result<(), String> {
         match self.metadata.algorithm {
-            AlgorithmId::HybridKemAes256Gcm | AlgorithmId::Aes256Gcm => Ok(()),
+            AlgorithmId::MlKem1024 | AlgorithmId::Aes256Gcm | 
+            AlgorithmId::MlDsa65 | AlgorithmId::SlhDsaSha2128s => Ok(()),
         }
     }
 
@@ -175,7 +178,7 @@ mod tests {
     #[test]
     fn test_sealed_blob_binary_serialization() {
         let blob = SealedBlob::new(
-            AlgorithmId::HybridKemAes256Gcm,
+            AlgorithmId::MlKem1024,
             vec![1, 2, 3, 4, 5],
             None,
         );

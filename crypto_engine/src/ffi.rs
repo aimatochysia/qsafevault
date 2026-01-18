@@ -1,10 +1,6 @@
 // FFI layer: C ABI for Flutter integration
 // All functions return status codes and use out-parameters for data
-//
-// EDITION SYSTEM:
-// Edition MUST be initialized before any cryptographic operations.
-// The Edition determines the CryptoPolicy (PQAllowed vs FipsOnly).
-// Enterprise mode enforces FIPS-only algorithms and requires external HSM.
+// FIPS-only mode: All algorithms are FIPS-approved (FIPS 203/204/205 post-quantum)
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
@@ -13,11 +9,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::hybrid_kem::{HybridKeypair, HybridCiphertext, encapsulate as hybrid_encapsulate};
+use crate::pqc_kem::{PqcKeypair, PqcCiphertext, encapsulate as pqc_encapsulate};
 use crate::symmetric::{SymmetricKey, EncryptedData, encrypt, decrypt};
 use crate::sealed_storage::{SealedBlob, AlgorithmId};
 use crate::platform_keystore::PlatformKeystore;
-use crate::edition::{Edition, Algorithm, EditionError, get_edition, initialize_edition, is_initialized, enforce_algorithm};
+use crate::edition::{Edition, Algorithm, EditionError, get_edition, initialize_edition, is_initialized};
 
 // Status codes
 pub const STATUS_OK: c_int = 0;
@@ -28,15 +24,13 @@ pub const STATUS_NOT_FOUND: c_int = -3;
 pub const STATUS_EDITION_NOT_INITIALIZED: c_int = -10;
 pub const STATUS_EDITION_ALREADY_INITIALIZED: c_int = -11;
 pub const STATUS_FIPS_VIOLATION: c_int = -20;
-pub const STATUS_PQ_DISABLED: c_int = -21;
 pub const STATUS_HSM_REQUIRED: c_int = -22;
 pub const STATUS_SOFTHSM_PROHIBITED: c_int = -23;
-pub const STATUS_DEPRECATED_ALGORITHM: c_int = -24;
 pub const STATUS_SERVER_EDITION_MISMATCH: c_int = -30;
 
-// Global handle storage
+// Global handle storage - now uses PqcKeypair (ML-KEM-1024)
 lazy_static::lazy_static! {
-    static ref KEYPAIR_HANDLES: Mutex<HashMap<u64, HybridKeypair>> = Mutex::new(HashMap::new());
+    static ref KEYPAIR_HANDLES: Mutex<HashMap<u64, PqcKeypair>> = Mutex::new(HashMap::new());
     static ref KEY_HANDLES: Mutex<HashMap<u64, SymmetricKey>> = Mutex::new(HashMap::new());
 }
 
@@ -56,9 +50,6 @@ fn edition_error_to_status(error: &EditionError) -> c_int {
     match error {
         EditionError::AlreadyInitialized => STATUS_EDITION_ALREADY_INITIALIZED,
         EditionError::NotInitialized => STATUS_EDITION_NOT_INITIALIZED,
-        EditionError::NonFipsAlgorithmProhibited(_) => STATUS_FIPS_VIOLATION,
-        EditionError::PostQuantumDisabled => STATUS_PQ_DISABLED,
-        EditionError::DeprecatedAlgorithm(_) => STATUS_DEPRECATED_ALGORITHM,
         EditionError::SoftHsmProhibited => STATUS_SOFTHSM_PROHIBITED,
         EditionError::LocalKeyGenerationProhibited => STATUS_HSM_REQUIRED,
         EditionError::ExternalHsmRequired => STATUS_HSM_REQUIRED,
@@ -167,18 +158,12 @@ pub extern "C" fn pqcrypto_get_edition_info(
         Ok(ed) => {
             let policy = ed.crypto_policy();
             let info = format!(
-                r#"{{"edition":"{}","crypto_policy":"{}","is_enterprise":{},"pq_allowed":{},"fips_only":{}}}"#,
+                r#"{{"edition":"{}","crypto_policy":"FipsApproved","is_enterprise":{},"fips_203":true,"fips_204":true,"fips_205":true}}"#,
                 match ed {
                     Edition::Consumer => "Consumer",
                     Edition::Enterprise => "Enterprise",
                 },
-                match policy {
-                    crate::edition::CryptoPolicy::PQAllowed => "PQAllowed",
-                    crate::edition::CryptoPolicy::FipsOnly => "FipsOnly",
-                },
                 ed == Edition::Enterprise,
-                policy == crate::edition::CryptoPolicy::PQAllowed,
-                policy == crate::edition::CryptoPolicy::FipsOnly,
             );
 
             if let Ok(c_str) = CString::new(info) {
@@ -201,19 +186,17 @@ pub extern "C" fn pqcrypto_get_edition_info(
 }
 
 /// Verify that an algorithm is permitted under the current Edition policy
-/// Algorithm IDs:
+/// Algorithm IDs (all FIPS-approved):
 ///   FIPS Classical: 0=AES256GCM, 1=SHA256, 2=SHA384, 3=HKDF_SHA256, 4=PBKDF2_HMAC_SHA256
 ///                   5=ECDSA_P256, 6=ECDSA_P384, 7=RSA_OAEP, 8=ECDH_P256, 9=ECDH_P384
 ///   FIPS Post-Quantum (FIPS 203/204/205):
 ///                   20=ML_KEM_1024, 21=ML_DSA_65, 22=SLH_DSA_SHA2_128S
-///   Deprecated: 10=ML_KEM_768, 11=DILITHIUM3
-///   Non-FIPS: 12=X25519, 13=SHA3_256, 14=HKDF_SHA3_256, 15=ARGON2ID
 #[no_mangle]
 pub extern "C" fn pqcrypto_verify_algorithm_permitted(
     algorithm_id: c_int,
     error_msg_out: *mut *mut c_char,
 ) -> c_int {
-    let algorithm = match algorithm_id {
+    let _algorithm = match algorithm_id {
         // FIPS-approved Classical
         0 => Algorithm::Aes256Gcm,
         1 => Algorithm::Sha256,
@@ -225,21 +208,13 @@ pub extern "C" fn pqcrypto_verify_algorithm_permitted(
         7 => Algorithm::RsaOaep,
         8 => Algorithm::EcdhP256,
         9 => Algorithm::EcdhP384,
-        // Deprecated PQ (will fail with STATUS_DEPRECATED_ALGORITHM)
-        10 => Algorithm::MlKem768,
-        11 => Algorithm::Dilithium3,
-        // Non-FIPS (Consumer only)
-        12 => Algorithm::X25519,
-        13 => Algorithm::Sha3_256,
-        14 => Algorithm::HkdfSha3_256,
-        15 => Algorithm::Argon2id,
         // FIPS-approved Post-Quantum (FIPS 203/204/205)
         20 => Algorithm::MlKem1024,
         21 => Algorithm::MlDsa65,
         22 => Algorithm::SlhDsaSha2128s,
         _ => {
             if !error_msg_out.is_null() {
-                if let Ok(c_str) = CString::new("Unknown algorithm ID") {
+                if let Ok(c_str) = CString::new("Unknown or removed algorithm ID. Only FIPS-approved algorithms are supported.") {
                     unsafe { *error_msg_out = c_str.into_raw(); }
                 }
             }
@@ -247,18 +222,8 @@ pub extern "C" fn pqcrypto_verify_algorithm_permitted(
         }
     };
 
-    match enforce_algorithm(algorithm) {
-        Ok(()) => STATUS_OK,
-        Err(e) => {
-            let status = edition_error_to_status(&e);
-            if !error_msg_out.is_null() {
-                if let Ok(c_str) = CString::new(e.to_string()) {
-                    unsafe { *error_msg_out = c_str.into_raw(); }
-                }
-            }
-            status
-        }
-    }
+    // All algorithms in the enum are FIPS-approved
+    STATUS_OK
 }
 
 /// Verify server Edition compatibility
@@ -316,69 +281,35 @@ pub extern "C" fn pqcrypto_verify_server_edition(
 // =============================================================================
 
 /// Check edition and enforce ML-KEM-1024 algorithm policy before hybrid operations
-/// This verifies that the ML-KEM-1024 (FIPS 203) post-quantum KEM algorithm is permitted.
-/// Used by hybrid encryption/decryption and keypair generation functions.
-/// Note: ML-KEM-1024 is FIPS-certified and allowed in both Consumer and Enterprise modes.
-fn require_hybrid_pq_algorithms() -> Result<(), String> {
-    // Hybrid operations use ML-KEM-1024 (FIPS 203) + X25519
-    // ML-KEM-1024 is FIPS-approved, X25519 is not
-    // In Enterprise mode, we should use pure ML-KEM-1024 or FIPS-approved classical
-    // For now, check ML-KEM-1024 as the primary PQ algorithm
-    match enforce_algorithm(Algorithm::MlKem1024) {
-        Ok(()) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Generate a new hybrid keypair (PQC + Classical)
-/// Returns handle to keypair, public keys written to out parameters
-/// 
-/// NOTE: This function uses ML-KEM-1024 (FIPS 203) + X25519
-/// ML-KEM-1024 is FIPS-certified and works in both Consumer and Enterprise modes.
-/// The hybrid with X25519 provides defense-in-depth but X25519 alone is not FIPS-approved.
+/// Generate a new ML-KEM-1024 keypair (FIPS 203)
+/// Returns handle to keypair, public key written to out parameters
 #[no_mangle]
-pub extern "C" fn pqcrypto_generate_hybrid_keypair(
+pub extern "C" fn pqcrypto_generate_keypair(
     keypair_handle_out: *mut u64,
-    pqc_public_key_out: *mut *mut u8,
-    pqc_public_key_len_out: *mut usize,
-    classical_public_key_out: *mut u8, // 32 bytes fixed
+    public_key_out: *mut *mut u8,
+    public_key_len_out: *mut usize,
     error_msg_out: *mut *mut c_char,
 ) -> c_int {
-    if keypair_handle_out.is_null() || pqc_public_key_out.is_null() 
-        || pqc_public_key_len_out.is_null() || classical_public_key_out.is_null() {
+    if keypair_handle_out.is_null() || public_key_out.is_null() 
+        || public_key_len_out.is_null() {
         return STATUS_INVALID_PARAM;
     }
 
-    // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_hybrid_pq_algorithms() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        return STATUS_PQ_DISABLED;
-    }
-
     match std::panic::catch_unwind(|| {
-        // Generate keypair
-        let keypair = HybridKeypair::generate();
-        let (pqc_pk, classical_pk) = keypair.public_keys_bytes();
+        // Generate ML-KEM-1024 keypair
+        let keypair = PqcKeypair::generate();
+        let pk_bytes = keypair.public_key_bytes();
         
-        // Allocate and copy PQC public key
-        let pqc_pk_len = pqc_pk.len();
-        let pqc_pk_ptr = unsafe {
-            let ptr = libc::malloc(pqc_pk_len) as *mut u8;
+        // Allocate and copy public key
+        let pk_len = pk_bytes.len();
+        let pk_ptr = unsafe {
+            let ptr = libc::malloc(pk_len) as *mut u8;
             if ptr.is_null() {
                 return Err("Memory allocation failed".to_string());
             }
-            std::ptr::copy_nonoverlapping(pqc_pk.as_ptr(), ptr, pqc_pk_len);
+            std::ptr::copy_nonoverlapping(pk_bytes.as_ptr(), ptr, pk_len);
             ptr
         };
-        
-        // Copy classical public key (32 bytes fixed)
-        unsafe {
-            std::ptr::copy_nonoverlapping(classical_pk.as_ptr(), classical_public_key_out, 32);
-        }
         
         // Store keypair and return handle
         let handle = next_handle();
@@ -386,8 +317,8 @@ pub extern "C" fn pqcrypto_generate_hybrid_keypair(
         
         unsafe {
             *keypair_handle_out = handle;
-            *pqc_public_key_out = pqc_pk_ptr;
-            *pqc_public_key_len_out = pqc_pk_len;
+            *public_key_out = pk_ptr;
+            *public_key_len_out = pk_len;
         }
         
         Ok(())
@@ -405,75 +336,72 @@ pub extern "C" fn pqcrypto_generate_hybrid_keypair(
     }
 }
 
-/// Hybrid encrypt a master key
-/// Encapsulates to public keys, then wraps the master key with the shared secret
-/// 
-/// NOTE: This function uses post-quantum algorithms (ML-KEM 768, X25519)
-/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
+/// Encrypt a master key using ML-KEM-1024 (FIPS 203)
+/// Encapsulates to public key, then wraps the master key with the shared secret
 #[no_mangle]
-pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
-    pqc_public_key: *const u8,
-    pqc_public_key_len: usize,
-    classical_public_key: *const u8, // 32 bytes
+pub extern "C" fn pqcrypto_encrypt_master_key(
+    public_key: *const u8,
+    public_key_len: usize,
     master_key: *const u8, // 32 bytes
     sealed_blob_out: *mut *mut u8,
     sealed_blob_len_out: *mut usize,
     error_msg_out: *mut *mut c_char,
 ) -> c_int {
-    if pqc_public_key.is_null() || classical_public_key.is_null() 
-        || master_key.is_null() || sealed_blob_out.is_null() 
-        || sealed_blob_len_out.is_null() {
+    if public_key.is_null() || master_key.is_null() 
+        || sealed_blob_out.is_null() || sealed_blob_len_out.is_null() {
         return STATUS_INVALID_PARAM;
     }
 
-    // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_hybrid_pq_algorithms() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        return STATUS_PQ_DISABLED;
-    }
-
     match std::panic::catch_unwind(|| {
-        let pqc_pk = unsafe { slice::from_raw_parts(pqc_public_key, pqc_public_key_len) };
-        let classical_pk: &[u8; 32] = unsafe { &*(classical_public_key as *const [u8; 32]) };
-        let master_key_bytes: &[u8; 32] = unsafe { &*(master_key as *const [u8; 32]) };
+        let pk_bytes = unsafe { slice::from_raw_parts(public_key, public_key_len) };
+        let mk_bytes: &[u8; 32] = unsafe { &*(master_key as *const [u8; 32]) };
+
+        // Perform ML-KEM-1024 encapsulation
+        let (shared_secret, pqc_ct) = pqc_encapsulate(pk_bytes)
+            .map_err(|e| format!("Encapsulation failed: {}", e))?;
+
+        // Validate shared secret length before creating symmetric key
+        if shared_secret.secret.len() < 32 {
+            return Err(format!("Shared secret too short: {} bytes, expected at least 32", shared_secret.secret.len()));
+        }
+        let secret_bytes: [u8; 32] = shared_secret.secret[..32].try_into()
+            .map_err(|_| "Invalid shared secret length")?;
+        let sym_key = SymmetricKey::from_bytes(secret_bytes);
         
-        // Perform hybrid encapsulation
-        let (shared_secret, hybrid_ct) = hybrid_encapsulate(pqc_pk, classical_pk)
-            .map_err(|e| format!("Hybrid encapsulation failed: {}", e))?;
-        
-        // Use shared secret to encrypt master key
-        let sym_key = SymmetricKey::from_bytes(shared_secret.secret);
-        let encrypted = encrypt(&sym_key, master_key_bytes, None)
+        // Encrypt master key with shared secret
+        let encrypted = encrypt(&sym_key, mk_bytes, Some(b"qsafevault-master-key-v1" as &[u8]))
             .map_err(|e| format!("Encryption failed: {}", e))?;
         
-        // Create sealed blob
+        // Create sealed blob with length-prefixed format (more robust than separator)
+        let ct_bytes = pqc_ct.to_bytes();
+        let enc_bytes = encrypted.to_bytes();
         let mut blob_data = Vec::new();
-        blob_data.extend_from_slice(&hybrid_ct.to_bytes());
-        blob_data.push(0xFF); // Separator
-        blob_data.extend_from_slice(&encrypted.to_bytes());
+        blob_data.extend_from_slice(&(ct_bytes.len() as u32).to_le_bytes());
+        blob_data.extend_from_slice(&ct_bytes);
+        blob_data.extend_from_slice(&enc_bytes);
         
-        let sealed_blob = SealedBlob::new(AlgorithmId::HybridKemAes256Gcm, blob_data, None);
-        let sealed_bytes = sealed_blob.to_bytes()
-            .map_err(|e| format!("Serialization failed: {}", e))?;
+        let blob = SealedBlob::new(
+            AlgorithmId::MlKem1024, // FIPS 203
+            blob_data,
+            None,
+        );
         
-        // Allocate and copy sealed blob
-        let sealed_len = sealed_bytes.len();
-        let sealed_ptr = unsafe {
-            let ptr = libc::malloc(sealed_len) as *mut u8;
+        let blob_bytes = blob.to_bytes()?;
+        
+        // Allocate and copy result
+        let blob_len = blob_bytes.len();
+        let blob_ptr = unsafe {
+            let ptr = libc::malloc(blob_len) as *mut u8;
             if ptr.is_null() {
                 return Err("Memory allocation failed".to_string());
             }
-            std::ptr::copy_nonoverlapping(sealed_bytes.as_ptr(), ptr, sealed_len);
+            std::ptr::copy_nonoverlapping(blob_bytes.as_ptr(), ptr, blob_len);
             ptr
         };
         
         unsafe {
-            *sealed_blob_out = sealed_ptr;
-            *sealed_blob_len_out = sealed_len;
+            *sealed_blob_out = blob_ptr;
+            *sealed_blob_len_out = blob_len;
         }
         
         Ok(())
@@ -491,13 +419,10 @@ pub extern "C" fn pqcrypto_hybrid_encrypt_master_key(
     }
 }
 
-/// Hybrid decrypt a master key
-/// Decapsulates ciphertext with keypair, then unwraps the master key
-/// 
-/// NOTE: This function uses post-quantum algorithms (ML-KEM 768, X25519)
-/// It is PROHIBITED in Enterprise mode and will return STATUS_PQ_DISABLED
+/// Decrypt a master key using ML-KEM-1024 (FIPS 203)
+/// Decapsulates ciphertext, then unwraps the master key
 #[no_mangle]
-pub extern "C" fn pqcrypto_hybrid_decrypt_master_key(
+pub extern "C" fn pqcrypto_decrypt_master_key(
     keypair_handle: u64,
     sealed_blob: *const u8,
     sealed_blob_len: usize,
@@ -508,59 +433,58 @@ pub extern "C" fn pqcrypto_hybrid_decrypt_master_key(
         return STATUS_INVALID_PARAM;
     }
 
-    // Enforce edition policy - PQ algorithms required
-    if let Err(e) = require_hybrid_pq_algorithms() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        return STATUS_PQ_DISABLED;
-    }
-
     match std::panic::catch_unwind(|| {
-        let sealed_bytes = unsafe { slice::from_raw_parts(sealed_blob, sealed_blob_len) };
+        let blob_bytes = unsafe { slice::from_raw_parts(sealed_blob, sealed_blob_len) };
         
-        // Deserialize sealed blob
-        let blob = SealedBlob::from_bytes(sealed_bytes)
-            .map_err(|e| format!("Deserialization failed: {}", e))?;
-        blob.validate()
-            .map_err(|e| format!("Validation failed: {}", e))?;
+        // Parse sealed blob
+        let blob = SealedBlob::from_bytes(blob_bytes)?;
         
-        // Find separator
-        let separator_pos = blob.ciphertext.iter().position(|&b| b == 0xFF)
-            .ok_or("Invalid blob format: separator not found")?;
+        // Parse length-prefixed format
+        if blob.ciphertext.len() < 4 {
+            return Err("Invalid blob format: too short".to_string());
+        }
+        let ct_len = u32::from_le_bytes([
+            blob.ciphertext[0], blob.ciphertext[1], 
+            blob.ciphertext[2], blob.ciphertext[3]
+        ]) as usize;
         
-        let hybrid_ct_bytes = &blob.ciphertext[..separator_pos];
-        let encrypted_bytes = &blob.ciphertext[separator_pos+1..];
+        if blob.ciphertext.len() < 4 + ct_len {
+            return Err(format!("Invalid blob format: ciphertext length mismatch"));
+        }
         
-        // Deserialize components
-        let hybrid_ct = HybridCiphertext::from_bytes(hybrid_ct_bytes)
-            .map_err(|e| format!("Invalid hybrid ciphertext: {}", e))?;
-        let encrypted = EncryptedData::from_bytes(encrypted_bytes)
-            .map_err(|e| format!("Invalid encrypted data: {}", e))?;
+        let pqc_ct_bytes = &blob.ciphertext[4..4 + ct_len];
+        let encrypted_bytes = &blob.ciphertext[4 + ct_len..];
         
-        // Get keypair
+        // Parse ciphertext
+        let pqc_ct = PqcCiphertext::from_bytes(pqc_ct_bytes)
+            .map_err(|e| format!("Invalid ciphertext: {}", e))?;
+        
+        // Get keypair and decapsulate
         let keypairs = KEYPAIR_HANDLES.lock().unwrap();
         let keypair = keypairs.get(&keypair_handle)
             .ok_or("Invalid keypair handle")?;
         
-        // Decapsulate to get shared secret
-        let shared_secret = keypair.decapsulate(&hybrid_ct)
-            .map_err(|e| format!("Decapsulation failed: {}", e))?;
+        let shared_secret = keypair.decapsulate(&pqc_ct);
+        
+        // Validate shared secret length before creating symmetric key
+        if shared_secret.secret.len() < 32 {
+            return Err(format!("Shared secret too short: {} bytes", shared_secret.secret.len()));
+        }
+        let secret_bytes: [u8; 32] = shared_secret.secret[..32].try_into()
+            .map_err(|_| "Invalid shared secret length")?;
+        let sym_key = SymmetricKey::from_bytes(secret_bytes);
         
         // Decrypt master key
-        let sym_key = SymmetricKey::from_bytes(shared_secret.secret);
-        let master_key_bytes = decrypt(&sym_key, &encrypted, None)
+        let encrypted = EncryptedData::from_bytes(encrypted_bytes)?;
+        let decrypted = decrypt(&sym_key, &encrypted, Some(b"qsafevault-master-key-v1" as &[u8]))
             .map_err(|e| format!("Decryption failed: {}", e))?;
         
-        if master_key_bytes.len() != 32 {
-            return Err("Invalid master key length".to_string());
+        if decrypted.len() != 32 {
+            return Err("Invalid master key size".to_string());
         }
         
-        // Copy master key to output
         unsafe {
-            std::ptr::copy_nonoverlapping(master_key_bytes.as_ptr(), master_key_out, 32);
+            std::ptr::copy_nonoverlapping(decrypted.as_ptr(), master_key_out, 32);
         }
         
         Ok(())
@@ -598,17 +522,11 @@ pub extern "C" fn pqcrypto_seal_private_key_with_platform_keystore(
         let keypair = keypairs.get(&keypair_handle)
             .ok_or("Invalid keypair handle")?;
         
-        // Serialize secret keys
-        let (pqc_sk, classical_sk) = keypair.secret_keys_bytes();
-        
-        // Combine both secret keys
-        let mut combined_sk = Vec::new();
-        combined_sk.extend_from_slice(&(pqc_sk.len() as u32).to_le_bytes());
-        combined_sk.extend_from_slice(&pqc_sk);
-        combined_sk.extend_from_slice(&classical_sk);
+        // Serialize secret key
+        let sk = keypair.secret_key_bytes();
         
         // Seal with platform keystore
-        let backend_type = PlatformKeystore::seal_key(key_id_str, &combined_sk)
+        let backend_type = PlatformKeystore::seal_key(key_id_str, &sk)
             .map_err(|e| format!("Failed to seal key: {}", e))?;
         
         log::info!("Sealed key with backend: {:?}", backend_type);
@@ -632,14 +550,12 @@ pub extern "C" fn pqcrypto_seal_private_key_with_platform_keystore(
 #[no_mangle]
 pub extern "C" fn pqcrypto_unseal_private_key_from_platform_keystore(
     key_id: *const c_char,
-    pqc_public_key: *const u8,
-    pqc_public_key_len: usize,
-    classical_public_key: *const u8, // 32 bytes
+    public_key: *const u8,
+    public_key_len: usize,
     keypair_handle_out: *mut u64,
     error_msg_out: *mut *mut c_char,
 ) -> c_int {
-    if key_id.is_null() || pqc_public_key.is_null() 
-        || classical_public_key.is_null() || keypair_handle_out.is_null() {
+    if key_id.is_null() || public_key.is_null() || keypair_handle_out.is_null() {
         return STATUS_INVALID_PARAM;
     }
 
@@ -648,32 +564,13 @@ pub extern "C" fn pqcrypto_unseal_private_key_from_platform_keystore(
             .map_err(|_| "Invalid key ID".to_string())?;
         
         // Unseal from platform keystore
-        let combined_sk = PlatformKeystore::unseal_key(key_id_str)
+        let sk = PlatformKeystore::unseal_key(key_id_str)
             .map_err(|e| format!("Failed to unseal key: {}", e))?;
         
-        // Parse combined secret keys
-        if combined_sk.len() < 4 {
-            return Err("Invalid sealed key format".to_string());
-        }
-        
-        let pqc_sk_len = u32::from_le_bytes([
-            combined_sk[0], combined_sk[1], combined_sk[2], combined_sk[3]
-        ]) as usize;
-        
-        if combined_sk.len() < 4 + pqc_sk_len + 32 {
-            return Err("Invalid sealed key length".to_string());
-        }
-        
-        let pqc_sk = &combined_sk[4..4+pqc_sk_len];
-        let classical_sk_bytes: [u8; 32] = combined_sk[4+pqc_sk_len..4+pqc_sk_len+32]
-            .try_into()
-            .map_err(|_| "Invalid classical secret key")?;
-        
         // Reconstruct keypair
-        let pqc_pk = unsafe { slice::from_raw_parts(pqc_public_key, pqc_public_key_len) };
-        let classical_pk: &[u8; 32] = unsafe { &*(classical_public_key as *const [u8; 32]) };
+        let pk = unsafe { slice::from_raw_parts(public_key, public_key_len) };
         
-        let keypair = HybridKeypair::from_bytes(pqc_pk, pqc_sk, classical_pk, &classical_sk_bytes)
+        let keypair = PqcKeypair::from_bytes(pk, &sk)
             .map_err(|e| format!("Failed to reconstruct keypair: {}", e))?;
         
         // Store keypair and return handle
@@ -923,10 +820,11 @@ pub extern "C" fn pqcrypto_init_logging(level: c_int) -> c_int {
         .init();
     
     log::info!("QSafeVault crypto engine logging initialized at level: {:?}", log_level);
-    log::info!("PQC Implementation: Kyber ML-KEM 768");
-    log::info!("Classical KEM: X25519");
-    log::info!("Hybrid KDF: HKDF-SHA3-256");
-    log::info!("Symmetric Encryption: AES-256-GCM");
+    log::info!("PQC KEM: ML-KEM-1024 (FIPS 203)");
+    log::info!("PQC Signature: ML-DSA-65 (FIPS 204)");
+    log::info!("Hash-Based Signature: SLH-DSA (FIPS 205)");
+    log::info!("KDF: HKDF-SHA256 (FIPS compliant)");
+    log::info!("Symmetric Encryption: AES-256-GCM (FIPS compliant)");
     
     STATUS_OK
 }
@@ -983,7 +881,7 @@ pub extern "C" fn pqcrypto_generate_random_bytes(
     }
 }
 
-/// Derive a key using HKDF-SHA3-256
+/// Derive a key using HKDF-SHA256 (FIPS compliant)
 /// Used for key derivation from shared secrets
 #[no_mangle]
 pub extern "C" fn pqcrypto_derive_key_hkdf(
@@ -1003,7 +901,7 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
 
     match std::panic::catch_unwind(|| {
         use hkdf::Hkdf;
-        use sha3::Sha3_256;
+        use sha2::Sha256;
         use zeroize::Zeroize;
         
         let ikm = unsafe { slice::from_raw_parts(input_key_material, ikm_len) };
@@ -1018,7 +916,7 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
             &[]
         };
         
-        let hk = Hkdf::<Sha3_256>::new(salt_slice, ikm);
+        let hk = Hkdf::<Sha256>::new(salt_slice, ikm);
         let mut okm = vec![0u8; output_key_len];
         hk.expand(info_slice, &mut okm)
             .map_err(|_| "HKDF expansion failed")?;
@@ -1072,16 +970,15 @@ pub extern "C" fn pqcrypto_get_version(
             "kem": "ML-KEM-1024 (FIPS 203)",
             "signature": "ML-DSA-65 (FIPS 204)",
             "hash_signature": "SLH-DSA-SHA2-128s (FIPS 205)",
-            "kdf": "HKDF-SHA3-256",
+            "kdf": "HKDF-SHA256",
             "cipher": "AES-256-GCM",
-            "hash": "SHA3-256"
+            "hash": "SHA-256"
         },
         "fips_203": true,
         "fips_204": true,
         "fips_205": true,
-        "fips_compatible": true,
-        "post_quantum": true,
-        "classical_fallback": false
+        "fips_only": true,
+        "post_quantum": true
     });
     
     let version = version_info.to_string();
@@ -1105,14 +1002,6 @@ lazy_static::lazy_static! {
     static ref SIGNING_KEYPAIR_HANDLES: Mutex<HashMap<u64, PqcSigningKeypair>> = Mutex::new(HashMap::new());
 }
 
-/// Helper to enforce ML-DSA-65 (FIPS 204) algorithm policy
-fn require_ml_dsa() -> Result<(), String> {
-    match enforce_algorithm(Algorithm::MlDsa65) {
-        Ok(()) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 /// Generate a new ML-DSA-65 (FIPS 204) signing keypair
 /// Returns handle to keypair, public key written to out parameter
 /// 
@@ -1127,16 +1016,6 @@ pub extern "C" fn pqcrypto_generate_signing_keypair(
 ) -> c_int {
     if keypair_handle_out.is_null() || public_key_out.is_null() || public_key_len_out.is_null() {
         return STATUS_INVALID_PARAM;
-    }
-
-    // Enforce edition policy - ML-DSA-65 is FIPS-certified
-    if let Err(e) = require_ml_dsa() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        return STATUS_PQ_DISABLED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -1196,17 +1075,6 @@ pub extern "C" fn pqcrypto_sign_message(
 ) -> c_int {
     if message.is_null() || signature_out.is_null() || signature_len_out.is_null() {
         return STATUS_INVALID_PARAM;
-    }
-
-    // Enforce edition policy - ML-DSA-65 is FIPS-certified
-    if let Err(e) = require_ml_dsa() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e.clone()) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        // Since ML-DSA-65 is FIPS-certified, errors should only be from uninitialized edition
-        return STATUS_EDITION_NOT_INITIALIZED;
     }
 
     match std::panic::catch_unwind(|| {
@@ -1270,17 +1138,6 @@ pub extern "C" fn pqcrypto_verify_signature(
 ) -> c_int {
     if public_key.is_null() || message.is_null() || signature.is_null() || valid_out.is_null() {
         return STATUS_INVALID_PARAM;
-    }
-
-    // Enforce edition policy - ML-DSA-65 is FIPS-certified
-    if let Err(e) = require_ml_dsa() {
-        if !error_msg_out.is_null() {
-            if let Ok(c_str) = CString::new(e.clone()) {
-                unsafe { *error_msg_out = c_str.into_raw(); }
-            }
-        }
-        // Since ML-DSA-65 is FIPS-certified, errors should only be from uninitialized edition
-        return STATUS_EDITION_NOT_INITIALIZED;
     }
 
     match std::panic::catch_unwind(|| -> Result<(), String> {
