@@ -881,7 +881,9 @@ pub extern "C" fn pqcrypto_generate_random_bytes(
     }
 }
 
-/// Derive a key using HKDF-SHA256 (FIPS compliant)
+/// Derive a key using SP 800-56C One-Step KDF (FIPS compliant)
+/// This implements NIST SP 800-56C Rev 2 One-Step Key Derivation Function
+/// using the hash-based construction (Option 1) with SHA-256
 /// Used for key derivation from shared secrets
 #[no_mangle]
 pub extern "C" fn pqcrypto_derive_key_hkdf(
@@ -900,15 +902,14 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
     }
 
     match std::panic::catch_unwind(|| {
-        use hkdf::Hkdf;
-        use sha2::Sha256;
+        use sha2::{Sha256, Digest};
         use zeroize::Zeroize;
         
         let ikm = unsafe { slice::from_raw_parts(input_key_material, ikm_len) };
         let salt_slice = if !salt.is_null() && salt_len > 0 {
-            Some(unsafe { slice::from_raw_parts(salt, salt_len) })
+            unsafe { slice::from_raw_parts(salt, salt_len) }
         } else {
-            None
+            &[]
         };
         let info_slice = if !info.is_null() && info_len > 0 {
             unsafe { slice::from_raw_parts(info, info_len) }
@@ -916,10 +917,31 @@ pub extern "C" fn pqcrypto_derive_key_hkdf(
             &[]
         };
         
-        let hk = Hkdf::<Sha256>::new(salt_slice, ikm);
+        // SP 800-56C Rev 2 One-Step KDF (Option 1: Hash-based)
+        // K(i) = H(counter || Z || OtherInfo)
+        // where:
+        //   counter = 32-bit big-endian counter starting at 1
+        //   Z = shared secret (input key material)
+        //   OtherInfo = salt || info (auxiliary shared info)
+        
+        const HASH_LEN: usize = 32; // SHA-256 output length
         let mut okm = vec![0u8; output_key_len];
-        hk.expand(info_slice, &mut okm)
-            .map_err(|_| "HKDF expansion failed")?;
+        let mut counter: u32 = 1;
+        
+        // Combine salt and info into "OtherInfo" as per SP 800-56C
+        let mut other_info = Vec::with_capacity(salt_slice.len() + info_slice.len());
+        other_info.extend_from_slice(salt_slice);
+        other_info.extend_from_slice(info_slice);
+        
+        for chunk in okm.chunks_mut(HASH_LEN) {
+            let mut hasher = Sha256::new();
+            hasher.update(&counter.to_be_bytes());
+            hasher.update(ikm);
+            hasher.update(&other_info);
+            let result = hasher.finalize();
+            chunk.copy_from_slice(&result[..chunk.len()]);
+            counter += 1;
+        }
         
         // Allocate and copy
         let output_ptr = unsafe {
@@ -970,13 +992,17 @@ pub extern "C" fn pqcrypto_get_version(
             "kem": "ML-KEM-1024 (FIPS 203)",
             "signature": "ML-DSA-65 (FIPS 204)",
             "hash_signature": "SLH-DSA-SHA2-128s (FIPS 205)",
-            "kdf": "HKDF-SHA256",
-            "cipher": "AES-256-GCM",
-            "hash": "SHA-256"
+            "kdf": "SP 800-56C One-Step KDF",
+            "pbkdf": "PBKDF2-HMAC-SHA256 (NIST SP 800-132)",
+            "cipher": "AES-256-GCM (FIPS 197)",
+            "hash": "SHA-256 (FIPS 180-4)",
+            "mac": "HMAC-SHA256/512 (FIPS 198-1)"
         },
         "fips_203": true,
         "fips_204": true,
         "fips_205": true,
+        "sp800_56c": true,
+        "sp800_132": true,
         "fips_only": true,
         "post_quantum": true
     });
@@ -1213,6 +1239,386 @@ pub extern "C" fn pqcrypto_get_signing_public_key(
         unsafe {
             *public_key_out = pk_ptr;
             *public_key_len_out = pk_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+// =============================================================================
+// FIPS-Compliant Symmetric Cryptography FFI Functions
+// =============================================================================
+
+/// Direct AES-256-GCM encryption
+/// Returns: nonce (12 bytes) || ciphertext || tag (16 bytes)
+/// 
+/// This is a FIPS-approved symmetric encryption algorithm.
+#[no_mangle]
+pub extern "C" fn pqcrypto_aes_gcm_encrypt(
+    key: *const u8,         // 32 bytes
+    plaintext: *const u8,
+    plaintext_len: usize,
+    aad: *const u8,         // Optional associated data
+    aad_len: usize,
+    ciphertext_out: *mut *mut u8,
+    ciphertext_len_out: *mut usize,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if key.is_null() || plaintext.is_null() || ciphertext_out.is_null() || ciphertext_len_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use crate::symmetric::{encrypt, SymmetricKey};
+        
+        let key_bytes: &[u8; 32] = unsafe { &*(key as *const [u8; 32]) };
+        let plaintext_bytes = unsafe { slice::from_raw_parts(plaintext, plaintext_len) };
+        let aad_bytes = if !aad.is_null() && aad_len > 0 {
+            Some(unsafe { slice::from_raw_parts(aad, aad_len) })
+        } else {
+            None
+        };
+        
+        let sym_key = SymmetricKey::from_bytes(*key_bytes);
+        let encrypted = encrypt(&sym_key, plaintext_bytes, aad_bytes)
+            .map_err(|e| format!("Encryption failed: {}", e))?;
+        
+        // Format: nonce || ciphertext || tag
+        let output = encrypted.to_bytes();
+        let output_len = output.len();
+        
+        let output_ptr = unsafe {
+            let ptr = libc::malloc(output_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(output.as_ptr(), ptr, output_len);
+            ptr
+        };
+        
+        unsafe {
+            *ciphertext_out = output_ptr;
+            *ciphertext_len_out = output_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// Direct AES-256-GCM decryption
+/// Input format: nonce (12 bytes) || ciphertext || tag (16 bytes)
+/// 
+/// This is a FIPS-approved symmetric decryption algorithm.
+#[no_mangle]
+pub extern "C" fn pqcrypto_aes_gcm_decrypt(
+    key: *const u8,         // 32 bytes
+    ciphertext: *const u8,  // nonce || ciphertext || tag
+    ciphertext_len: usize,
+    aad: *const u8,         // Optional associated data (must match encryption)
+    aad_len: usize,
+    plaintext_out: *mut *mut u8,
+    plaintext_len_out: *mut usize,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if key.is_null() || ciphertext.is_null() || plaintext_out.is_null() || plaintext_len_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use crate::symmetric::{decrypt, EncryptedData, SymmetricKey};
+        
+        let key_bytes: &[u8; 32] = unsafe { &*(key as *const [u8; 32]) };
+        let ciphertext_bytes = unsafe { slice::from_raw_parts(ciphertext, ciphertext_len) };
+        let aad_bytes = if !aad.is_null() && aad_len > 0 {
+            Some(unsafe { slice::from_raw_parts(aad, aad_len) })
+        } else {
+            None
+        };
+        
+        let encrypted = EncryptedData::from_bytes(ciphertext_bytes)
+            .map_err(|e| format!("Invalid ciphertext format: {}", e))?;
+        
+        let sym_key = SymmetricKey::from_bytes(*key_bytes);
+        let plaintext = decrypt(&sym_key, &encrypted, aad_bytes)
+            .map_err(|e| format!("Decryption failed: {}", e))?;
+        
+        let plaintext_len = plaintext.len();
+        let plaintext_ptr = unsafe {
+            let ptr = libc::malloc(plaintext_len) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(plaintext.as_ptr(), ptr, plaintext_len);
+            ptr
+        };
+        
+        unsafe {
+            *plaintext_out = plaintext_ptr;
+            *plaintext_len_out = plaintext_len;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// SHA-256 hash
+/// 
+/// This is a FIPS-approved hash function.
+#[no_mangle]
+pub extern "C" fn pqcrypto_sha256(
+    data: *const u8,
+    data_len: usize,
+    hash_out: *mut *mut u8,  // 32 bytes output
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if data.is_null() || hash_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use sha2::{Sha256, Digest};
+        
+        let data_bytes = unsafe { slice::from_raw_parts(data, data_len) };
+        
+        let mut hasher = Sha256::new();
+        hasher.update(data_bytes);
+        let result = hasher.finalize();
+        
+        let hash_ptr = unsafe {
+            let ptr = libc::malloc(32) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(result.as_ptr(), ptr, 32);
+            ptr
+        };
+        
+        unsafe {
+            *hash_out = hash_ptr;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// HMAC-SHA256
+/// 
+/// This is a FIPS-approved MAC function.
+#[no_mangle]
+pub extern "C" fn pqcrypto_hmac_sha256(
+    key: *const u8,
+    key_len: usize,
+    data: *const u8,
+    data_len: usize,
+    mac_out: *mut *mut u8,  // 32 bytes output
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if key.is_null() || data.is_null() || mac_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use sha2::Sha256;
+        use hmac::{Hmac, Mac};
+        
+        type HmacSha256 = Hmac<Sha256>;
+        
+        let key_bytes = unsafe { slice::from_raw_parts(key, key_len) };
+        let data_bytes = unsafe { slice::from_raw_parts(data, data_len) };
+        
+        let mut mac = HmacSha256::new_from_slice(key_bytes)
+            .map_err(|_| "Invalid key length")?;
+        mac.update(data_bytes);
+        let result = mac.finalize();
+        
+        let mac_ptr = unsafe {
+            let ptr = libc::malloc(32) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(result.into_bytes().as_ptr(), ptr, 32);
+            ptr
+        };
+        
+        unsafe {
+            *mac_out = mac_ptr;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// PBKDF2-HMAC-SHA256 key derivation
+/// 
+/// This is a FIPS-approved (NIST SP 800-132) key derivation function.
+/// Use this instead of Argon2id for FIPS compliance.
+#[no_mangle]
+pub extern "C" fn pqcrypto_pbkdf2_sha256(
+    password: *const u8,
+    password_len: usize,
+    salt: *const u8,
+    salt_len: usize,
+    iterations: u32,
+    output_key_len: usize,
+    output_key_out: *mut *mut u8,
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if password.is_null() || salt.is_null() || output_key_out.is_null() || output_key_len == 0 {
+        return STATUS_INVALID_PARAM;
+    }
+    
+    // Minimum security requirements
+    if iterations < 10000 {
+        if !error_msg_out.is_null() {
+            if let Ok(c_str) = CString::new("Iterations must be at least 10000 for FIPS compliance") {
+                unsafe { *error_msg_out = c_str.into_raw(); }
+            }
+        }
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use sha2::Sha256;
+        use hmac::Hmac;
+        use pbkdf2::pbkdf2;
+        use zeroize::Zeroize;
+        
+        type HmacSha256 = Hmac<Sha256>;
+        
+        let password_bytes = unsafe { slice::from_raw_parts(password, password_len) };
+        let salt_bytes = unsafe { slice::from_raw_parts(salt, salt_len) };
+        
+        let mut okm = vec![0u8; output_key_len];
+        pbkdf2::<HmacSha256>(password_bytes, salt_bytes, iterations, &mut okm)
+            .map_err(|_| "PBKDF2 derivation failed")?;
+        
+        let output_ptr = unsafe {
+            let ptr = libc::malloc(output_key_len) as *mut u8;
+            if ptr.is_null() {
+                okm.zeroize();
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(okm.as_ptr(), ptr, output_key_len);
+            ptr
+        };
+        
+        okm.zeroize();
+        
+        unsafe {
+            *output_key_out = output_ptr;
+        }
+        
+        Ok(())
+    }) {
+        Ok(Ok(())) => STATUS_OK,
+        Ok(Err(e)) => {
+            if !error_msg_out.is_null() {
+                if let Ok(c_str) = CString::new(e) {
+                    unsafe { *error_msg_out = c_str.into_raw(); }
+                }
+            }
+            STATUS_ERROR
+        }
+        Err(_) => STATUS_ERROR,
+    }
+}
+
+/// HMAC-SHA512 (for key verification and message authentication)
+/// 
+/// This is a FIPS-approved MAC function with larger output.
+#[no_mangle]
+pub extern "C" fn pqcrypto_hmac_sha512(
+    key: *const u8,
+    key_len: usize,
+    data: *const u8,
+    data_len: usize,
+    mac_out: *mut *mut u8,  // 64 bytes output
+    error_msg_out: *mut *mut c_char,
+) -> c_int {
+    if key.is_null() || data.is_null() || mac_out.is_null() {
+        return STATUS_INVALID_PARAM;
+    }
+
+    match std::panic::catch_unwind(|| {
+        use sha2::Sha512;
+        use hmac::{Hmac, Mac};
+        
+        type HmacSha512 = Hmac<Sha512>;
+        
+        let key_bytes = unsafe { slice::from_raw_parts(key, key_len) };
+        let data_bytes = unsafe { slice::from_raw_parts(data, data_len) };
+        
+        let mut mac = HmacSha512::new_from_slice(key_bytes)
+            .map_err(|_| "Invalid key length")?;
+        mac.update(data_bytes);
+        let result = mac.finalize();
+        
+        let mac_ptr = unsafe {
+            let ptr = libc::malloc(64) as *mut u8;
+            if ptr.is_null() {
+                return Err("Memory allocation failed".to_string());
+            }
+            std::ptr::copy_nonoverlapping(result.into_bytes().as_ptr(), ptr, 64);
+            ptr
+        };
+        
+        unsafe {
+            *mac_out = mac_ptr;
         }
         
         Ok(())
