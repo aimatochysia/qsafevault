@@ -1,9 +1,9 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '/models/password_entry.dart';
-import '/services/crypto_service.dart';
+import '/services/fips_crypto_service.dart';
 import '/services/storage_service.dart';
-import 'package:cryptography/cryptography.dart';
 import '/widgets/entry_form.dart';
 import '/widgets/sync_dialog.dart';
 import 'package:qsafevault/services/theme_service.dart';
@@ -11,9 +11,9 @@ import '../services/crypto_backend_notifier.dart';
 import '../ffi/rust_crypto_service.dart';
 class HomePage extends StatefulWidget {
   final StorageService storage;
-  final CryptoService cryptoService;
+  final FipsCryptoService cryptoService;
   final String folderPath;
-  final SecretKey secretKey;
+  final Uint8List secretKey;
   final String initialJson;
   const HomePage({
     Key? key,

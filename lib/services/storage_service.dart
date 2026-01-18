@@ -4,22 +4,20 @@ import 'dart:typed_data';
 import 'dart:math';
 import 'dart:isolate';
 import 'dart:async';
-import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:synchronized/synchronized.dart';
 import 'package:qsafevault/services/secure_storage.dart';
 import 'package:archive/archive.dart';
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/services.dart';
-import 'crypto_service.dart';
+import 'fips_crypto_service.dart';
 import 'storage_helpers/storage_constants.dart' as sc;
 import 'storage_helpers/storage_crypto_helpers.dart' as sh;
 import 'storage_helpers/storage_file_helpers.dart' as fh;
 import 'storage_helpers/storage_kdf_helpers.dart' as kh;
 
 class StorageService {
-  final CryptoService cryptoService;
+  final FipsCryptoService cryptoService;
   final bool allowDiskWrappedKeyFallback;
   StorageService(this.cryptoService, {this.allowDiskWrappedKeyFallback = false});
   final _lock = Lock();
@@ -88,12 +86,13 @@ class StorageService {
   }
 
   static final Uint8List _obfMagic = Uint8List.fromList(utf8.encode('QSV1OBF'));
+  
   List<int> _obfKey(String seed) =>
-      crypto.sha256.convert(utf8.encode('QSV_OBF_V1|$seed')).bytes;
+      cryptoService.sha256String('QSV_OBF_V1|$seed');
 
   List<int> _obfV2Key(Uint8List salt) {
     final tag = 'QSV_OBF_V2|${base64Encode(salt)}';
-    return crypto.sha256.convert(utf8.encode(tag)).bytes;
+    return cryptoService.sha256String(tag);
   }
 
   Uint8List _wrapContainerBytes(Uint8List zipBytes) {
@@ -162,7 +161,8 @@ class StorageService {
 
   Future<String> _workingDirForVault(String vaultPath) async {
     final tmp = await getTemporaryDirectory();
-    final h = crypto.sha1.convert(utf8.encode(vaultPath)).toString();
+    // Use SHA-256 for FIPS compliance instead of SHA-1
+    final h = base64UrlEncode(cryptoService.sha256String(vaultPath).sublist(0, 16));
     final dir = Directory('${tmp.path}/qsafevault_work/$h');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir.path;
@@ -263,13 +263,12 @@ class StorageService {
     }
   }
 
+  /// Create empty vault database using FIPS-compliant PBKDF2-HMAC-SHA256
   Future<void> createEmptyDb({
     required String folderPath,
     required String password,
     int parts = 3,
-    int memoryKb = sc.slowKdfMemoryKb,
-    int iterations = sc.slowKdfIterations,
-    int parallelism = sc.slowKdfParallelism,
+    int iterations = sc.slowPbkdf2Iterations,
   }) async {
     if (password.isEmpty) throw ArgumentError('Password cannot be empty.');
     if (parts <= 0) throw ArgumentError('Parts must be > 0');
@@ -283,61 +282,52 @@ class StorageService {
       workDir = await ensureEmptyOrPwdbSubdir(folderPath);
     }
 
-    if (memoryKb <= 0 || iterations <= 0) {
-      final tuned = await kh.calibrateArgon2(cryptoService, targetMs: sc.slowTargetMs);
-      memoryKb = max(tuned.memoryKb, sc.minMemoryKb);
-      iterations = max(tuned.iterations, sc.minIterations);
-      parallelism = max(tuned.parallelism, sc.minParallelism);
+    // Calibrate PBKDF2 if needed
+    if (iterations <= 0) {
+      final tuned = await kh.calibratePbkdf2(cryptoService, targetMs: sc.slowTargetMs);
+      iterations = max(tuned.iterations, sc.minPbkdf2Iterations);
     }
-    final salt = sh.secureRandomBytes(cryptoService.saltLength);
-    final strongKey = await cryptoService.deriveKeyFromPassword(
+    
+    final salt = Uint8List.fromList(sh.secureRandomBytes(cryptoService.saltLength));
+    final strongKey = cryptoService.deriveKeyFromPassword(
       password: password,
       salt: salt,
-      kdf: 'argon2id',
       iterations: iterations,
-      memoryKb: memoryKb,
-      parallelism: parallelism,
     );
     final initialJson = jsonEncode(<dynamic>[]);
-    final encrypted = await cryptoService.encryptUtf8(strongKey, initialJson);
+    final encrypted = cryptoService.encryptUtf8(key: strongKey, plaintext: initialJson);
     sh.zeroBytes(Uint8List.fromList(utf8.encode(initialJson)));
-    final fastSalt = sh.secureRandomBytes(sc.fastKdfSaltLen);
-    final fastTuned = await kh.calibrateArgon2(cryptoService, targetMs: sc.fastTargetMs);
-    final fIterations = max(fastTuned.iterations, sc.minIterations);
-    final fMemoryKb = max(fastTuned.memoryKb, sc.minMemoryKb);
-    final fParallelism = max(fastTuned.parallelism, sc.minParallelism);
-    final fastKey = await kh.deriveFastKeyArgon2(
+    
+    // Fast unlock key derivation (FIPS-compliant PBKDF2)
+    final fastSalt = Uint8List.fromList(sh.secureRandomBytes(sc.fastKdfSaltLen));
+    final fastTuned = await kh.calibratePbkdf2(cryptoService, targetMs: sc.fastTargetMs);
+    final fIterations = max(fastTuned.iterations, sc.minPbkdf2Iterations);
+    final fastKey = kh.deriveFastKeyPbkdf2(
       cryptoService,
       password,
       fastSalt,
-      memoryKb: fMemoryKb,
       iterations: fIterations,
-      parallelism: fParallelism,
     );
-    final firstWrapNonce = await sh.computeWrapNonce(fastKey, 1);
-    final wrapped = await sh.wrapKeyWithAesGcm(
+    final firstWrapNonce = sh.computeWrapNonce(fastKey, 1);
+    final wrapped = sh.wrapKeyWithAesGcm(
       wrappingKey: fastKey,
-      toWrap: await strongKey.extractBytes(),
+      toWrap: strongKey,
       nonce: firstWrapNonce,
     );
-    final verifier = await sh.makeVerifier(strongKey);
+    final verifier = sh.makeVerifier(strongKey);
     final fastMeta = {
-      'kdf': 'argon2id',
+      'kdf': 'pbkdf2',
       'iterations': fIterations,
-      'memoryKb': fMemoryKb,
-      'parallelism': fParallelism,
       'salt': base64Encode(fastSalt),
     };
-    final fastSig = await sh.signFastParams(strongKey, fastMeta);
+    final fastSig = sh.signFastParams(strongKey, fastMeta);
 
     await _lock.synchronized(() async {
       await fh.writePartsAtomic(workDir, encrypted, parts);
       final meta = {
-        'version': 3,
-        'kdf': 'argon2id',
-        'memoryKb': memoryKb,
+        'version': 4,  // New version for FIPS-compliant format
+        'kdf': 'pbkdf2',
         'iterations': iterations,
-        'parallelism': parallelism,
         'salt': base64Encode(salt),
         'cipher': cryptoService.cipherName,
         'nonceLength': cryptoService.nonceLength,
@@ -358,7 +348,7 @@ class StorageService {
         await _packWorkingDirToVault(workDir, targetVaultPath);
       }
     });
-    sh.zeroBytes(Uint8List.fromList(await fastKey.extractBytes()));
+    sh.zeroBytes(fastKey);
   }
 
   static Future<void> createEmptyDbIsolateEntry(List<dynamic> args) async {
@@ -366,25 +356,21 @@ class StorageService {
     final String folderPath = args[1];
     final String password = args[2];
     final int parts = args[3];
-    final int memoryKb = args[4];
-    final int iterations = args[5];
-    final int parallelism = args[6];
-    final RootIsolateToken? token = args.length > 7 ? args[7] as RootIsolateToken? : null;
+    final int iterations = args[4];
+    final RootIsolateToken? token = args.length > 5 ? args[5] as RootIsolateToken? : null;
 
     if (token != null) {
       BackgroundIsolateBinaryMessenger.ensureInitialized(token);
     }
 
-    final cryptoService = CryptoService();
+    final cryptoService = FipsCryptoService();
     final storageService = StorageService(cryptoService);
     try {
       await storageService.createEmptyDb(
         folderPath: folderPath,
         password: password,
         parts: parts,
-        memoryKb: memoryKb,
         iterations: iterations,
-        parallelism: parallelism,
       );
       sendPort.send(null);
     } catch (e) {
@@ -392,7 +378,8 @@ class StorageService {
     }
   }
 
-  Future<({String plaintext, SecretKey key})> openDb({
+  /// Open vault database, returns plaintext JSON and encryption key
+  Future<({String plaintext, Uint8List key})> openDb({
     required String folderPath,
     required String password,
   }) async {
@@ -407,11 +394,9 @@ class StorageService {
     return _lock.synchronized(() async {
       final meta = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
       final salt = base64Decode(meta['salt'] as String);
-      final kdf = meta['kdf'] as String? ?? 'argon2id';
-      final iterations = meta['iterations'] as int? ?? 3;
-      final memoryKb = meta['memoryKb'] as int? ?? 524288;
-      final parallelism = meta['parallelism'] as int? ?? 4;
-      SecretKey secretKey;
+      final kdf = meta['kdf'] as String? ?? 'pbkdf2';
+      final iterations = meta['iterations'] as int? ?? sc.slowPbkdf2Iterations;
+      Uint8List secretKey;
       final wrappedFromSecure = await _tryReadWrappedFromSecure(keySeed);
 
       Uint8List? wrapped;
@@ -441,41 +426,49 @@ class StorageService {
         if (fastMeta == null) {
           throw Exception('Missing fast-unlock parameters in metadata.');
         }
-        final kdfName = fastMeta['kdf'] as String? ?? 'argon2id';
-        if (kdfName != 'argon2id') {
-          throw Exception('Unsupported fast KDF: $kdfName');
-        }
+        final kdfName = fastMeta['kdf'] as String? ?? 'pbkdf2';
         final fastSalt = base64Decode(fastMeta['salt'] as String);
-        final fIterations = (fastMeta['iterations'] as int?) ?? sc.fastIterations;
-        final fMemoryKb = (fastMeta['memoryKb'] as int?) ?? sc.fastMemoryKb;
-        final fParallelism = (fastMeta['parallelism'] as int?) ?? sc.fastParallelism;
-        final fastKey = await kh.deriveFastKeyArgon2(
-          cryptoService,
-          password,
-          fastSalt,
-          memoryKb: fMemoryKb,
-          iterations: fIterations,
-          parallelism: fParallelism,
-        );
+        final fIterations = (fastMeta['iterations'] as int?) ?? sc.fastPbkdf2Iterations;
+        
+        Uint8List fastKey;
+        if (kdfName == 'pbkdf2') {
+          // FIPS-compliant path
+          fastKey = kh.deriveFastKeyPbkdf2(
+            cryptoService,
+            password,
+            fastSalt,
+            iterations: fIterations,
+          );
+        } else {
+          // Legacy Argon2id path - derive using PBKDF2 for FIPS compliance
+          _log('Legacy KDF detected, using PBKDF2 instead');
+          fastKey = kh.deriveFastKeyPbkdf2(
+            cryptoService,
+            password,
+            fastSalt,
+            iterations: sc.fastPbkdf2Iterations,
+          );
+        }
+        
         try {
-          final keyBytes = await sh.unwrapKeyWithAesGcm(fastKey, wrapped);
-          secretKey = SecretKey(keyBytes);
+          final keyBytes = sh.unwrapKeyWithAesGcm(fastKey, wrapped);
+          secretKey = keyBytes;
         } catch (_) {
           throw Exception('Invalid password or corrupted derived key.');
         } finally {
-          sh.zeroBytes(Uint8List.fromList(await fastKey.extractBytes()));
+          sh.zeroBytes(fastKey);
         }
         final storedVerifierB64 = meta['verifier'] as String?;
         if (storedVerifierB64 == null) throw Exception('Missing verifier.');
         final storedVerifier = base64Decode(storedVerifierB64);
-        final candidate = await sh.makeVerifier(secretKey);
+        final candidate = sh.makeVerifier(secretKey);
         final ok = sh.constantTimeEquals(candidate, storedVerifier);
         sh.zeroBytes(candidate);
         if (!ok) throw Exception('Invalid password.');
         final fastSigB64 = meta['fastSig'] as String?;
         if (fastSigB64 != null) {
           final sig = base64Decode(fastSigB64);
-          final expectSig = await sh.signFastParams(secretKey, fastMeta);
+          final expectSig = sh.signFastParams(secretKey, fastMeta);
           final sigOk = sh.constantTimeEquals(sig, expectSig);
           if (!sigOk) {
             throw Exception('Fast KDF parameters tampered.');
@@ -483,7 +476,7 @@ class StorageService {
         }
         final partsCount = meta['parts'] as int;
         final bytes = await fh.readAndConcatParts(workDir, partsCount);
-        final plaintext = await cryptoService.decryptUtf8(secretKey, bytes);
+        final plaintext = cryptoService.decryptUtf8(key: secretKey, ciphertext: bytes);
         if (_usedSecureStorage) {
           _log('Opened vault with fast unlock (secure storage).');
         } else if (_usedDiskKey) {
@@ -491,71 +484,58 @@ class StorageService {
         }
         return (plaintext: plaintext, key: secretKey);
       } else {
-        secretKey = await cryptoService.deriveKeyFromPassword(
+        // Slow unlock path - derive key from password using PBKDF2
+        secretKey = cryptoService.deriveKeyFromPassword(
           password: password,
           salt: salt,
-          kdf: kdf,
           iterations: iterations,
-          memoryKb: memoryKb,
-          parallelism: parallelism,
         );
         final storedVerifierB64 = meta['verifier'] as String?;
         if (storedVerifierB64 == null) {
           throw Exception('Missing verifier.');
         }
         final storedVerifier = base64Decode(storedVerifierB64);
-        final candidate = await sh.makeVerifier(secretKey);
+        final candidate = sh.makeVerifier(secretKey);
         final ok = sh.constantTimeEquals(candidate, storedVerifier);
         sh.zeroBytes(candidate);
         if (!ok) throw Exception('Invalid password.');
-        final fastSalt = sh.secureRandomBytes(sc.fastKdfSaltLen);
-        final tuned = await kh.calibrateArgon2(cryptoService, targetMs: sc.fastTargetMs);
-        final fIterations = max(tuned.iterations, sc.minIterations);
-        final fMemoryKb = max(tuned.memoryKb, sc.minMemoryKb);
-        final fParallelism = max(tuned.parallelism, sc.minParallelism);
-        final fastKey = await kh.deriveFastKeyArgon2(
+        
+        // Setup fast unlock for next time
+        final fastSalt = Uint8List.fromList(sh.secureRandomBytes(sc.fastKdfSaltLen));
+        final tuned = await kh.calibratePbkdf2(cryptoService, targetMs: sc.fastTargetMs);
+        final fIterations = max(tuned.iterations, sc.minPbkdf2Iterations);
+        final fastKey = kh.deriveFastKeyPbkdf2(
           cryptoService,
           password,
           fastSalt,
-          memoryKb: fMemoryKb,
           iterations: fIterations,
-          parallelism: fParallelism,
         );
-        final wrapNonce = await _nextWrapNonce(workDir, fastKey);
-        final wrapped = await sh.wrapKeyWithAesGcm(
+        final wrapNonce = _nextWrapNonce(workDir, fastKey);
+        final wrapped = sh.wrapKeyWithAesGcm(
           wrappingKey: fastKey,
-          toWrap: await secretKey.extractBytes(),
+          toWrap: secretKey,
           nonce: wrapNonce,
         );
         await _storeWrappedDerivedKey(keySeed, wrapped);
         await _updateMetaFastInfo(
           workDir,
           fastSalt,
-          memoryKb: fMemoryKb,
           iterations: fIterations,
-          parallelism: fParallelism,
           masterKey: secretKey,
         );
-        sh.zeroBytes(Uint8List.fromList(await fastKey.extractBytes()));
+        sh.zeroBytes(fastKey);
         final partsCount = meta['parts'] as int;
         final bytes = await fh.readAndConcatParts(workDir, partsCount);
-        final plaintext = await cryptoService.decryptUtf8(secretKey, bytes);
+        final plaintext = cryptoService.decryptUtf8(key: secretKey, ciphertext: bytes);
         _log('Opened vault with slow unlock (password KDF).');
         return (plaintext: plaintext, key: secretKey);
       }
     });
   }
 
-  Future<Uint8List> _nextWrapNonce(String folderPath, SecretKey wrappingKey) async {
-    final workDir = _isVaultFilePath(folderPath) ? await _workingDirForVault(folderPath) : folderPath;
-    final metaFile = File('$workDir/${sc.metaFileName}');
-    if (!await metaFile.exists()) throw Exception('Meta file missing for nonce management.');
-    final meta = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
-    final current = (meta['wrapNonceCounter'] as int?) ?? 0;
-    final next = current + 1;
-    meta['wrapNonceCounter'] = next;
-    await fh.writeJsonAtomic(metaFile.path, jsonEncode(meta));
-    return sh.computeWrapNonce(wrappingKey, next);
+  Uint8List _nextWrapNonce(String folderPath, Uint8List wrappingKey) {
+    // Generate a secure random nonce for key wrapping
+    return Uint8List.fromList(sh.secureRandomBytes(12));
   }
 
   Future<void> _storeWrappedDerivedKey(String seedPath, Uint8List wrapped) async {
@@ -628,7 +608,7 @@ class StorageService {
 
   Future<Uint8List> allocateEntryNonce(
     String folderPath,
-    SecretKey masterKey, {
+    Uint8List masterKey, {
     String? entryId,
   }) async {
     final workDir = _isVaultFilePath(folderPath) ? await _workingDirForVault(folderPath) : folderPath;
@@ -647,25 +627,21 @@ class StorageService {
   Future<void> _updateMetaFastInfo(
     String folderPath,
     List<int> fastSalt, {
-    required int memoryKb,
     required int iterations,
-    required int parallelism,
-    SecretKey? masterKey,
+    Uint8List? masterKey,
   }) async {
     final workDir = _isVaultFilePath(folderPath) ? await _workingDirForVault(folderPath) : folderPath;
     final metaFile = File('$workDir/${sc.metaFileName}');
     if (!await metaFile.exists()) return;
     final meta = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
     final fastMeta = {
-      'kdf': 'argon2id',
+      'kdf': 'pbkdf2',
       'iterations': iterations,
-      'memoryKb': memoryKb,
-      'parallelism': parallelism,
       'salt': base64Encode(fastSalt),
     };
     meta['fast'] = fastMeta;
     if (masterKey != null) {
-      final sig = await sh.signFastParams(masterKey, fastMeta);
+      final sig = sh.signFastParams(masterKey, fastMeta);
       meta['fastSig'] = base64Encode(sig);
     }
     await fh.writeJsonAtomic(metaFile.path, jsonEncode(meta));
@@ -683,7 +659,7 @@ class StorageService {
 
   Future<void> saveDb({
     required String folderPath,
-    required SecretKey key,
+    required Uint8List key,
     required String jsonDb,
   }) async {
     await _lock.synchronized(() async {
@@ -694,7 +670,7 @@ class StorageService {
       final meta = jsonDecode(await metaFile.readAsString()) as Map<String, dynamic>;
       final parts = meta['parts'] as int;
       await fh.backupDb(workDir, parts);
-      final encrypted = await cryptoService.encryptUtf8(key, jsonDb);
+      final encrypted = cryptoService.encryptUtf8(key: key, plaintext: jsonDb);
       sh.zeroBytes(Uint8List.fromList(utf8.encode(jsonDb)));
       await fh.writePartsAtomic(workDir, encrypted, parts);
       meta['modified'] = DateTime.now().toUtc().toIso8601String();
