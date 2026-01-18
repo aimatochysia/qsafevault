@@ -645,7 +645,7 @@ class RustCryptoService {
     }
   }
 
-  /// Derive a key using HKDF-SHA3-256
+  /// Derive a key using SP 800-56C One-Step KDF with SHA-256 (NIST SP 800-56C Rev 2)
   Uint8List deriveKeyHkdf({
     required Uint8List inputKeyMaterial,
     Uint8List? salt,

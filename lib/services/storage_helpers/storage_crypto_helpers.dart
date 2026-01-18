@@ -59,10 +59,10 @@ Uint8List computeWrapNonce(Uint8List wrappingKeyBytes, int counter) {
 }
 
 /// Wrap key using AES-256-GCM (FIPS 197)
+/// Note: The Rust FFI generates a random nonce internally for security
 Uint8List wrapKeyWithAesGcm({
   required Uint8List wrappingKey,
   required List<int> toWrap,
-  required Uint8List nonce,
 }) {
   final labelBytes = utf8.encode(sc.keyWrapLabel);
   final msg = Uint8List(labelBytes.length + toWrap.length)

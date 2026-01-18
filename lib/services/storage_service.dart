@@ -161,8 +161,8 @@ class StorageService {
 
   Future<String> _workingDirForVault(String vaultPath) async {
     final tmp = await getTemporaryDirectory();
-    // Use SHA-256 for FIPS compliance instead of SHA-1
-    final h = base64UrlEncode(cryptoService.sha256String(vaultPath).sublist(0, 16));
+    // Use full SHA-256 hash for FIPS compliance and collision resistance
+    final h = base64UrlEncode(cryptoService.sha256String(vaultPath));
     final dir = Directory('${tmp.path}/qsafevault_work/$h');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir.path;
@@ -308,11 +308,9 @@ class StorageService {
       fastSalt,
       iterations: fIterations,
     );
-    final firstWrapNonce = sh.computeWrapNonce(fastKey, 1);
     final wrapped = sh.wrapKeyWithAesGcm(
       wrappingKey: fastKey,
       toWrap: strongKey,
-      nonce: firstWrapNonce,
     );
     final verifier = sh.makeVerifier(strongKey);
     final fastMeta = {
@@ -510,11 +508,9 @@ class StorageService {
           fastSalt,
           iterations: fIterations,
         );
-        final wrapNonce = _nextWrapNonce(workDir, fastKey);
         final wrapped = sh.wrapKeyWithAesGcm(
           wrappingKey: fastKey,
           toWrap: secretKey,
-          nonce: wrapNonce,
         );
         await _storeWrappedDerivedKey(keySeed, wrapped);
         await _updateMetaFastInfo(
@@ -531,11 +527,6 @@ class StorageService {
         return (plaintext: plaintext, key: secretKey);
       }
     });
-  }
-
-  Uint8List _nextWrapNonce(String folderPath, Uint8List wrappingKey) {
-    // Generate a secure random nonce for key wrapping
-    return Uint8List.fromList(sh.secureRandomBytes(12));
   }
 
   Future<void> _storeWrappedDerivedKey(String seedPath, Uint8List wrapped) async {

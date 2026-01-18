@@ -139,10 +139,10 @@ class CryptoBackendNotifier {
     // Build sync info string
     final syncInfo = _buildSyncInfo(syncConfig);
 
-    // Crypto algorithms
+    // Crypto algorithms - all FIPS-compliant now
     final cryptoAlgo = edition.isEnterprise 
-        ? 'AES-256-GCM (FIPS)' 
-        : 'ML-KEM 768 + X25519';
+        ? 'ML-KEM-1024/ML-DSA-65 (FIPS)' 
+        : 'ML-KEM-1024/ML-DSA-65 (FIPS)';
 
     return '$editionStr | $backend | $cryptoAlgo | Sync: $syncInfo';
   }

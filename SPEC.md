@@ -1,6 +1,6 @@
 # QSafeVault Software Specification
 
-**Version**: 2.0  
+**Version**: 2.1  
 **Last Updated**: January 2026  
 **Classification**: Technical Specification
 
@@ -35,9 +35,10 @@ QSafeVault is a post-quantum secure password manager implementing **FIPS 203/204
 | Function | Algorithm | Standard |
 |----------|-----------|----------|
 | Symmetric Encryption | AES-256-GCM | FIPS 197 |
-| Key Derivation | HKDF-SHA256 | NIST SP 800-56C |
+| Key Derivation | SP 800-56C One-Step KDF | NIST SP 800-56C Rev 2 |
 | Password KDF | PBKDF2-HMAC-SHA256 | NIST SP 800-132 |
-| Hash Function | SHA-256/384 | FIPS 180-4 |
+| Hash Function | SHA-256/384/512 | FIPS 180-4 |
+| MAC Function | HMAC-SHA256/512 | FIPS 198-1 |
 
 ### 2.3 Algorithm Enforcement
 
@@ -48,8 +49,8 @@ All algorithms in the system are FIPS-approved. Both Consumer and Enterprise edi
 | ML-KEM-1024 (FIPS 203) | ✅ Enabled | ✅ Enabled |
 | ML-DSA-65 (FIPS 204) | ✅ Enabled | ✅ Enabled |
 | SLH-DSA (FIPS 205) | ✅ Enabled | ✅ Enabled |
-| AES-256-GCM | ✅ Enabled | ✅ Enabled |
-| HKDF-SHA256 | ✅ Enabled | ✅ Enabled |
+| AES-256-GCM (FIPS 197) | ✅ Enabled | ✅ Enabled |
+| SP 800-56C One-Step KDF | ✅ Enabled | ✅ Enabled |
 | PBKDF2-HMAC-SHA256 | ✅ Enabled | ✅ Enabled |
 
 ---

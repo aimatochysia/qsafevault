@@ -173,10 +173,11 @@ class FipsCryptoService {
   }
 
   /// Wrap key using AES-256-GCM
+  /// Note: The Rust AES-GCM implementation generates a cryptographically secure
+  /// random nonce internally for each encryption operation, ensuring nonce uniqueness.
   Uint8List wrapKey({
     required Uint8List wrappingKey,
     required Uint8List toWrap,
-    required Uint8List nonce,
     String label = 'qsv-key-wrap-v1',
   }) {
     final labelBytes = utf8.encode(label);
@@ -184,8 +185,7 @@ class FipsCryptoService {
       ..setRange(0, labelBytes.length, labelBytes)
       ..setRange(labelBytes.length, labelBytes.length + toWrap.length, toWrap);
     
-    // Create ciphertext using nonce provided
-    // Note: Rust AES-GCM generates its own nonce, so we need to concatenate
+    // Rust generates a random nonce internally for each encryption
     final encrypted = _rust.aesGcmEncrypt(key: wrappingKey, plaintext: msg);
     
     // Return nonce || ciphertext || tag
