@@ -62,7 +62,7 @@ pub enum KeyProviderType {
 /// Algorithm identifier with FIPS compliance information
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
-    // FIPS-approved algorithms
+    // FIPS-approved algorithms (Classical)
     Aes256Gcm,
     Sha256,
     Sha384,
@@ -74,9 +74,16 @@ pub enum Algorithm {
     EcdhP256,
     EcdhP384,
 
-    // Non-FIPS algorithms (Consumer only)
-    MlKem768,
-    Dilithium3,
+    // FIPS-approved Post-Quantum algorithms (FIPS 203, 204, 205)
+    MlKem1024,      // FIPS 203: ML-KEM-1024
+    MlDsa65,        // FIPS 204: ML-DSA-65
+    SlhDsaSha2128s, // FIPS 205: SLH-DSA-SHA2-128s
+
+    // Legacy/Deprecated (kept for compatibility, not FIPS)
+    MlKem768,       // Deprecated: Use MlKem1024 instead
+    Dilithium3,     // Deprecated: Use MlDsa65 instead
+    
+    // Non-FIPS algorithms (Consumer only when hybrid mode needed)
     X25519,
     Sha3_256,
     HkdfSha3_256,
@@ -85,9 +92,11 @@ pub enum Algorithm {
 
 impl Algorithm {
     /// Check if this algorithm is FIPS-approved
+    /// Now includes FIPS 203/204/205 post-quantum algorithms
     pub fn is_fips_approved(&self) -> bool {
         matches!(
             self,
+            // Classical FIPS algorithms
             Algorithm::Aes256Gcm
                 | Algorithm::Sha256
                 | Algorithm::Sha384
@@ -98,11 +107,35 @@ impl Algorithm {
                 | Algorithm::RsaOaep
                 | Algorithm::EcdhP256
                 | Algorithm::EcdhP384
+                // FIPS 203/204/205 Post-Quantum algorithms
+                | Algorithm::MlKem1024
+                | Algorithm::MlDsa65
+                | Algorithm::SlhDsaSha2128s
         )
     }
 
     /// Check if this algorithm is post-quantum
     pub fn is_post_quantum(&self) -> bool {
+        matches!(
+            self, 
+            Algorithm::MlKem1024 
+                | Algorithm::MlDsa65 
+                | Algorithm::SlhDsaSha2128s
+                | Algorithm::MlKem768  // Legacy
+                | Algorithm::Dilithium3  // Legacy
+        )
+    }
+    
+    /// Check if this algorithm is FIPS-certified post-quantum (FIPS 203/204/205)
+    pub fn is_fips_post_quantum(&self) -> bool {
+        matches!(
+            self,
+            Algorithm::MlKem1024 | Algorithm::MlDsa65 | Algorithm::SlhDsaSha2128s
+        )
+    }
+    
+    /// Check if this algorithm is deprecated
+    pub fn is_deprecated(&self) -> bool {
         matches!(self, Algorithm::MlKem768 | Algorithm::Dilithium3)
     }
 }
@@ -124,8 +157,10 @@ pub enum EditionError {
     ExternalHsmRequired,
     /// HSM is not FIPS-validated
     HsmNotFipsValidated,
-    /// Post-quantum algorithms disabled in Enterprise mode
+    /// Post-quantum algorithms disabled in Enterprise mode (legacy error, kept for compatibility)
     PostQuantumDisabled,
+    /// Deprecated algorithm used - upgrade to FIPS-certified version
+    DeprecatedAlgorithm(Algorithm),
     /// Server edition mismatch (Enterprise client to Consumer server)
     ServerEditionMismatch { client: Edition, server: Edition },
     /// Server does not support required Enterprise features
@@ -159,7 +194,11 @@ impl std::fmt::Display for EditionError {
                 write!(f, "ENTERPRISE: HSM is not FIPS-validated")
             }
             EditionError::PostQuantumDisabled => {
-                write!(f, "ENTERPRISE: Post-quantum algorithms are disabled until FIPS-approved")
+                // Legacy error - kept for backward compatibility with older clients
+                write!(f, "LEGACY ERROR: Post-quantum was previously disabled. This error is deprecated - FIPS 203/204/205 algorithms are now available.")
+            }
+            EditionError::DeprecatedAlgorithm(alg) => {
+                write!(f, "DEPRECATED: Algorithm {:?} is deprecated. Use FIPS-certified alternatives: ML-KEM-1024 (FIPS 203), ML-DSA-65 (FIPS 204), SLH-DSA (FIPS 205)", alg)
             }
             EditionError::ServerEditionMismatch { client, server } => {
                 write!(f, "ENTERPRISE: Edition mismatch - {:?} client cannot connect to {:?} server", client, server)
@@ -185,13 +224,16 @@ impl Edition {
 
     /// Check if an algorithm is permitted for this edition
     pub fn is_algorithm_permitted(&self, algorithm: Algorithm) -> Result<(), EditionError> {
+        // Check for deprecated algorithms
+        if algorithm.is_deprecated() {
+            return Err(EditionError::DeprecatedAlgorithm(algorithm));
+        }
+        
         match self.crypto_policy() {
             CryptoPolicy::PQAllowed => Ok(()),
             CryptoPolicy::FipsOnly => {
                 if algorithm.is_fips_approved() {
                     Ok(())
-                } else if algorithm.is_post_quantum() {
-                    Err(EditionError::PostQuantumDisabled)
                 } else {
                     Err(EditionError::NonFipsAlgorithmProhibited(algorithm))
                 }
@@ -303,29 +345,71 @@ mod tests {
     // For unit testing, we test the Edition methods directly without global state
 
     #[test]
-    fn test_consumer_edition_allows_all_algorithms() {
+    fn test_consumer_edition_allows_fips_pq_algorithms() {
         let edition = Edition::Consumer;
-        assert!(edition.is_algorithm_permitted(Algorithm::MlKem768).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Dilithium3).is_ok());
+        // FIPS 203/204/205 algorithms allowed
+        assert!(edition.is_algorithm_permitted(Algorithm::MlKem1024).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::MlDsa65).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::SlhDsaSha2128s).is_ok());
+        // Classical FIPS algorithms allowed
         assert!(edition.is_algorithm_permitted(Algorithm::Aes256Gcm).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::Sha256).is_ok());
+        // Non-FIPS algorithms allowed in Consumer mode
         assert!(edition.is_algorithm_permitted(Algorithm::Sha3_256).is_ok());
         assert!(edition.is_algorithm_permitted(Algorithm::Argon2id).is_ok());
     }
+    
+    #[test]
+    fn test_consumer_edition_rejects_deprecated_algorithms() {
+        let edition = Edition::Consumer;
+        // Deprecated PQ algorithms should be rejected even in Consumer mode
+        assert!(matches!(
+            edition.is_algorithm_permitted(Algorithm::MlKem768),
+            Err(EditionError::DeprecatedAlgorithm(_))
+        ));
+        assert!(matches!(
+            edition.is_algorithm_permitted(Algorithm::Dilithium3),
+            Err(EditionError::DeprecatedAlgorithm(_))
+        ));
+    }
 
+    #[test]
+    fn test_enterprise_edition_allows_fips_pq() {
+        let edition = Edition::Enterprise;
+
+        // FIPS 203/204/205 Post-Quantum algorithms should be allowed in Enterprise mode
+        assert!(edition.is_algorithm_permitted(Algorithm::MlKem1024).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::MlDsa65).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::SlhDsaSha2128s).is_ok());
+        
+        // Classical FIPS algorithms should be allowed
+        assert!(edition.is_algorithm_permitted(Algorithm::Aes256Gcm).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::Sha256).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::HkdfSha256).is_ok());
+    }
+    
     #[test]
     fn test_enterprise_edition_prohibits_non_fips() {
         let edition = Edition::Enterprise;
 
-        // FIPS algorithms should be allowed
-        assert!(edition.is_algorithm_permitted(Algorithm::Aes256Gcm).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Sha256).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::HkdfSha256).is_ok());
-
         // Non-FIPS algorithms should be prohibited
-        assert!(edition.is_algorithm_permitted(Algorithm::MlKem768).is_err());
-        assert!(edition.is_algorithm_permitted(Algorithm::Dilithium3).is_err());
         assert!(edition.is_algorithm_permitted(Algorithm::Sha3_256).is_err());
         assert!(edition.is_algorithm_permitted(Algorithm::X25519).is_err());
+        assert!(edition.is_algorithm_permitted(Algorithm::Argon2id).is_err());
+    }
+    
+    #[test]
+    fn test_enterprise_edition_rejects_deprecated_algorithms() {
+        let edition = Edition::Enterprise;
+        // Deprecated algorithms should be rejected
+        assert!(matches!(
+            edition.is_algorithm_permitted(Algorithm::MlKem768),
+            Err(EditionError::DeprecatedAlgorithm(_))
+        ));
+        assert!(matches!(
+            edition.is_algorithm_permitted(Algorithm::Dilithium3),
+            Err(EditionError::DeprecatedAlgorithm(_))
+        ));
     }
 
     #[test]
@@ -380,16 +464,23 @@ mod tests {
 
     #[test]
     fn test_algorithm_fips_classification() {
-        // FIPS approved
+        // FIPS approved (Classical)
         assert!(Algorithm::Aes256Gcm.is_fips_approved());
         assert!(Algorithm::Sha256.is_fips_approved());
         assert!(Algorithm::Sha384.is_fips_approved());
         assert!(Algorithm::HkdfSha256.is_fips_approved());
         assert!(Algorithm::Pbkdf2HmacSha256.is_fips_approved());
+        
+        // FIPS approved (Post-Quantum - FIPS 203/204/205)
+        assert!(Algorithm::MlKem1024.is_fips_approved());
+        assert!(Algorithm::MlDsa65.is_fips_approved());
+        assert!(Algorithm::SlhDsaSha2128s.is_fips_approved());
 
-        // Not FIPS approved
+        // Not FIPS approved (deprecated)
         assert!(!Algorithm::MlKem768.is_fips_approved());
         assert!(!Algorithm::Dilithium3.is_fips_approved());
+        
+        // Not FIPS approved (non-PQ)
         assert!(!Algorithm::X25519.is_fips_approved());
         assert!(!Algorithm::Sha3_256.is_fips_approved());
         assert!(!Algorithm::Argon2id.is_fips_approved());
@@ -397,10 +488,44 @@ mod tests {
 
     #[test]
     fn test_algorithm_post_quantum_classification() {
+        // FIPS-certified PQ
+        assert!(Algorithm::MlKem1024.is_post_quantum());
+        assert!(Algorithm::MlDsa65.is_post_quantum());
+        assert!(Algorithm::SlhDsaSha2128s.is_post_quantum());
+        
+        // Legacy PQ (deprecated)
         assert!(Algorithm::MlKem768.is_post_quantum());
         assert!(Algorithm::Dilithium3.is_post_quantum());
+        
+        // Not PQ
         assert!(!Algorithm::Aes256Gcm.is_post_quantum());
         assert!(!Algorithm::X25519.is_post_quantum());
+    }
+    
+    #[test]
+    fn test_algorithm_fips_post_quantum() {
+        // Only FIPS 203/204/205 algorithms
+        assert!(Algorithm::MlKem1024.is_fips_post_quantum());
+        assert!(Algorithm::MlDsa65.is_fips_post_quantum());
+        assert!(Algorithm::SlhDsaSha2128s.is_fips_post_quantum());
+        
+        // Deprecated PQ are not FIPS PQ
+        assert!(!Algorithm::MlKem768.is_fips_post_quantum());
+        assert!(!Algorithm::Dilithium3.is_fips_post_quantum());
+        
+        // Classical are not PQ
+        assert!(!Algorithm::Aes256Gcm.is_fips_post_quantum());
+    }
+    
+    #[test]
+    fn test_algorithm_deprecated() {
+        assert!(Algorithm::MlKem768.is_deprecated());
+        assert!(Algorithm::Dilithium3.is_deprecated());
+        
+        // New algorithms are not deprecated
+        assert!(!Algorithm::MlKem1024.is_deprecated());
+        assert!(!Algorithm::MlDsa65.is_deprecated());
+        assert!(!Algorithm::SlhDsaSha2128s.is_deprecated());
     }
 
     #[test]

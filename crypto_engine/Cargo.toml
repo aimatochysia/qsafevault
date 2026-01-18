@@ -22,12 +22,15 @@ sha3 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
-# Kyber ML-KEM for post-quantum KEM
+# FIPS 203: ML-KEM-1024 for post-quantum KEM
 pqcrypto-mlkem = "0.1"
 pqcrypto-traits = "0.3"
 
-# Dilithium for post-quantum digital signatures
-pqcrypto-dilithium = "0.5"
+# FIPS 204: ML-DSA-65 for post-quantum digital signatures
+pqcrypto-mldsa = "0.1"
+
+# FIPS 205: SLH-DSA (SPHINCS+) for stateless hash-based signatures
+pqcrypto-sphincsplus = "0.7"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

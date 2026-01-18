@@ -366,8 +366,8 @@ mod security_tests {
         let keypair = PqcKeypair::generate();
         let pk = keypair.public_key_bytes();
         
-        // Public key should be correct length for ML-KEM-768
-        assert_eq!(pk.len(), 1184, "ML-KEM-768 public key should be 1184 bytes");
+        // Public key should be correct length for ML-KEM-1024 (FIPS 203)
+        assert_eq!(pk.len(), 1568, "ML-KEM-1024 public key should be 1568 bytes");
     }
     
     #[test]
