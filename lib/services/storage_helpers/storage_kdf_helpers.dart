@@ -1,53 +1,50 @@
 import 'dart:math';
-import 'package:cryptography/cryptography.dart';
-import '../../services/crypto_service.dart';
+import 'dart:typed_data';
+import '../fips_crypto_service.dart';
 import 'storage_constants.dart' as sc;
 import 'storage_crypto_helpers.dart' as sh;
-Future<({int memoryKb, int iterations, int parallelism})> calibrateArgon2(
-  CryptoService cryptoService, {
+
+/// Calibrate PBKDF2-HMAC-SHA256 iterations for target time
+/// FIPS-compliant replacement for Argon2id calibration
+Future<({int iterations})> calibratePbkdf2(
+  FipsCryptoService cryptoService, {
   required int targetMs,
 }) async {
-  final testSalt = sh.secureRandomBytes(cryptoService.saltLength);
+  final testSalt = sh.secureRandomBytes(16);
   const testPassword = 'qsv-calibration';
-  int iterations = max(sc.minIterations, 1);
-  int memoryKb = max(sc.minMemoryKb, sc.slowKdfMemoryKb ~/ 2);
-  int parallelism = sc.minParallelism;
+  
+  // Start with minimum FIPS-compliant iterations
+  int iterations = max(sc.minPbkdf2Iterations, 100000);
   Duration took;
+  
   do {
     final sw = Stopwatch()..start();
-    await cryptoService.deriveKeyFromPassword(
+    cryptoService.deriveKeyFromPassword(
       password: testPassword,
       salt: testSalt,
-      kdf: 'argon2id',
       iterations: iterations,
-      memoryKb: memoryKb,
-      parallelism: parallelism,
     );
     sw.stop();
     took = sw.elapsed;
+    
     if (took.inMilliseconds < targetMs) {
-      iterations = (iterations * 2).clamp(sc.minIterations, 1 << 24);
-      if (iterations > 8 && took.inMilliseconds < targetMs / 4) {
-        memoryKb = (memoryKb * 2).clamp(sc.minMemoryKb, sc.slowKdfMemoryKb);
-      }
+      iterations = (iterations * 2).clamp(sc.minPbkdf2Iterations, 10000000);
     }
-  } while (took.inMilliseconds < targetMs && iterations < (1 << 20));
-  return (memoryKb: memoryKb, iterations: iterations, parallelism: parallelism);
+  } while (took.inMilliseconds < targetMs && iterations < 10000000);
+  
+  return (iterations: iterations);
 }
-Future<SecretKey> deriveFastKeyArgon2(
-  CryptoService cryptoService,
+
+/// Derive fast key using PBKDF2-HMAC-SHA256 (FIPS-compliant)
+Uint8List deriveFastKeyPbkdf2(
+  FipsCryptoService cryptoService,
   String password,
   List<int> salt, {
-  required int memoryKb,
   required int iterations,
-  required int parallelism,
-}) async {
+}) {
   return cryptoService.deriveKeyFromPassword(
     password: password,
     salt: salt,
-    kdf: 'argon2id',
     iterations: iterations,
-    memoryKb: memoryKb,
-    parallelism: parallelism,
   );
 }

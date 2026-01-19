@@ -645,7 +645,7 @@ class RustCryptoService {
     }
   }
 
-  /// Derive a key using HKDF-SHA3-256
+  /// Derive a key using SP 800-56C One-Step KDF with SHA-256 (NIST SP 800-56C Rev 2)
   Uint8List deriveKeyHkdf({
     required Uint8List inputKeyMaterial,
     Uint8List? salt,
@@ -730,6 +730,312 @@ class RustCryptoService {
       return '{}';
     } finally {
       calloc.free(versionPtr);
+    }
+  }
+
+  // ==========================================================================
+  // FIPS-Compliant Symmetric Cryptography Methods
+  // ==========================================================================
+
+  /// AES-256-GCM encryption (FIPS 197)
+  /// Returns: nonce (12 bytes) || ciphertext || tag (16 bytes)
+  Uint8List aesGcmEncrypt({
+    required Uint8List key,
+    required Uint8List plaintext,
+    Uint8List? aad,
+  }) {
+    if (key.length != 32) {
+      throw ArgumentError('Key must be 32 bytes');
+    }
+
+    final keyPtr = calloc<ffi.Uint8>(32);
+    final plaintextPtr = calloc<ffi.Uint8>(plaintext.length);
+    final aadPtr = aad != null ? calloc<ffi.Uint8>(aad.length) : ffi.nullptr.cast<ffi.Uint8>();
+    final ciphertextPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final ciphertextLenPtr = calloc<ffi.Size>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      keyPtr.asTypedList(32).setAll(0, key);
+      plaintextPtr.asTypedList(plaintext.length).setAll(0, plaintext);
+      if (aad != null) {
+        aadPtr.asTypedList(aad.length).setAll(0, aad);
+      }
+
+      final aesGcmEncrypt = _lib
+          .lookup<ffi.NativeFunction<NativeAesGcmEncrypt>>('pqcrypto_aes_gcm_encrypt')
+          .asFunction<DartAesGcmEncrypt>();
+
+      final status = aesGcmEncrypt(
+        keyPtr,
+        plaintextPtr,
+        plaintext.length,
+        aadPtr,
+        aad?.length ?? 0,
+        ciphertextPtr,
+        ciphertextLenPtr,
+        errorPtr,
+      );
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('AES-GCM encryption failed: $error');
+      }
+
+      if (ciphertextPtr.value == ffi.nullptr) {
+        throw Exception('AES-GCM encryption failed: null pointer');
+      }
+
+      final ciphertextLen = ciphertextLenPtr.value;
+      final ciphertext = Uint8List.fromList(ciphertextPtr.value.asTypedList(ciphertextLen));
+      _freeMemory(ciphertextPtr.value);
+
+      return ciphertext;
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(plaintextPtr);
+      if (aad != null) calloc.free(aadPtr);
+      calloc.free(ciphertextPtr);
+      calloc.free(ciphertextLenPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// AES-256-GCM decryption (FIPS 197)
+  /// Input format: nonce (12 bytes) || ciphertext || tag (16 bytes)
+  Uint8List aesGcmDecrypt({
+    required Uint8List key,
+    required Uint8List ciphertext,
+    Uint8List? aad,
+  }) {
+    if (key.length != 32) {
+      throw ArgumentError('Key must be 32 bytes');
+    }
+
+    final keyPtr = calloc<ffi.Uint8>(32);
+    final ciphertextPtr = calloc<ffi.Uint8>(ciphertext.length);
+    final aadPtr = aad != null ? calloc<ffi.Uint8>(aad.length) : ffi.nullptr.cast<ffi.Uint8>();
+    final plaintextPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final plaintextLenPtr = calloc<ffi.Size>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      keyPtr.asTypedList(32).setAll(0, key);
+      ciphertextPtr.asTypedList(ciphertext.length).setAll(0, ciphertext);
+      if (aad != null) {
+        aadPtr.asTypedList(aad.length).setAll(0, aad);
+      }
+
+      final aesGcmDecrypt = _lib
+          .lookup<ffi.NativeFunction<NativeAesGcmDecrypt>>('pqcrypto_aes_gcm_decrypt')
+          .asFunction<DartAesGcmDecrypt>();
+
+      final status = aesGcmDecrypt(
+        keyPtr,
+        ciphertextPtr,
+        ciphertext.length,
+        aadPtr,
+        aad?.length ?? 0,
+        plaintextPtr,
+        plaintextLenPtr,
+        errorPtr,
+      );
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('AES-GCM decryption failed: $error');
+      }
+
+      if (plaintextPtr.value == ffi.nullptr) {
+        throw Exception('AES-GCM decryption failed: null pointer');
+      }
+
+      final plaintextLen = plaintextLenPtr.value;
+      final plaintext = Uint8List.fromList(plaintextPtr.value.asTypedList(plaintextLen));
+      _freeMemory(plaintextPtr.value);
+
+      return plaintext;
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(ciphertextPtr);
+      if (aad != null) calloc.free(aadPtr);
+      calloc.free(plaintextPtr);
+      calloc.free(plaintextLenPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// SHA-256 hash (FIPS 180-4)
+  Uint8List sha256(Uint8List data) {
+    final dataPtr = calloc<ffi.Uint8>(data.length);
+    final hashPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      dataPtr.asTypedList(data.length).setAll(0, data);
+
+      final sha256Fn = _lib
+          .lookup<ffi.NativeFunction<NativeSha256>>('pqcrypto_sha256')
+          .asFunction<DartSha256>();
+
+      final status = sha256Fn(dataPtr, data.length, hashPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('SHA-256 failed: $error');
+      }
+
+      if (hashPtr.value == ffi.nullptr) {
+        throw Exception('SHA-256 failed: null pointer');
+      }
+
+      final hash = Uint8List.fromList(hashPtr.value.asTypedList(32));
+      _freeMemory(hashPtr.value);
+
+      return hash;
+    } finally {
+      calloc.free(dataPtr);
+      calloc.free(hashPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// HMAC-SHA256 (FIPS 198-1)
+  Uint8List hmacSha256({required Uint8List key, required Uint8List data}) {
+    final keyPtr = calloc<ffi.Uint8>(key.length);
+    final dataPtr = calloc<ffi.Uint8>(data.length);
+    final macPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      keyPtr.asTypedList(key.length).setAll(0, key);
+      dataPtr.asTypedList(data.length).setAll(0, data);
+
+      final hmacSha256Fn = _lib
+          .lookup<ffi.NativeFunction<NativeHmacSha256>>('pqcrypto_hmac_sha256')
+          .asFunction<DartHmacSha256>();
+
+      final status = hmacSha256Fn(keyPtr, key.length, dataPtr, data.length, macPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('HMAC-SHA256 failed: $error');
+      }
+
+      if (macPtr.value == ffi.nullptr) {
+        throw Exception('HMAC-SHA256 failed: null pointer');
+      }
+
+      final mac = Uint8List.fromList(macPtr.value.asTypedList(32));
+      _freeMemory(macPtr.value);
+
+      return mac;
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(dataPtr);
+      calloc.free(macPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// HMAC-SHA512 (FIPS 198-1)
+  Uint8List hmacSha512({required Uint8List key, required Uint8List data}) {
+    final keyPtr = calloc<ffi.Uint8>(key.length);
+    final dataPtr = calloc<ffi.Uint8>(data.length);
+    final macPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      keyPtr.asTypedList(key.length).setAll(0, key);
+      dataPtr.asTypedList(data.length).setAll(0, data);
+
+      final hmacSha512Fn = _lib
+          .lookup<ffi.NativeFunction<NativeHmacSha512>>('pqcrypto_hmac_sha512')
+          .asFunction<DartHmacSha512>();
+
+      final status = hmacSha512Fn(keyPtr, key.length, dataPtr, data.length, macPtr, errorPtr);
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('HMAC-SHA512 failed: $error');
+      }
+
+      if (macPtr.value == ffi.nullptr) {
+        throw Exception('HMAC-SHA512 failed: null pointer');
+      }
+
+      final mac = Uint8List.fromList(macPtr.value.asTypedList(64));
+      _freeMemory(macPtr.value);
+
+      return mac;
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(dataPtr);
+      calloc.free(macPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
+    }
+  }
+
+  /// PBKDF2-HMAC-SHA256 key derivation (NIST SP 800-132)
+  /// Minimum 10000 iterations required for FIPS compliance
+  Uint8List pbkdf2Sha256({
+    required Uint8List password,
+    required Uint8List salt,
+    required int iterations,
+    required int outputKeyLength,
+  }) {
+    if (iterations < 10000) {
+      throw ArgumentError('Iterations must be at least 10000 for FIPS compliance');
+    }
+
+    final passwordPtr = calloc<ffi.Uint8>(password.length);
+    final saltPtr = calloc<ffi.Uint8>(salt.length);
+    final outputKeyPtr = calloc<ffi.Pointer<ffi.Uint8>>();
+    final errorPtr = calloc<ffi.Pointer<ffi.Char>>();
+
+    try {
+      passwordPtr.asTypedList(password.length).setAll(0, password);
+      saltPtr.asTypedList(salt.length).setAll(0, salt);
+
+      final pbkdf2Fn = _lib
+          .lookup<ffi.NativeFunction<NativePbkdf2Sha256>>('pqcrypto_pbkdf2_sha256')
+          .asFunction<DartPbkdf2Sha256>();
+
+      final status = pbkdf2Fn(
+        passwordPtr,
+        password.length,
+        saltPtr,
+        salt.length,
+        iterations,
+        outputKeyLength,
+        outputKeyPtr,
+        errorPtr,
+      );
+
+      if (status != statusOk) {
+        final error = _getError(errorPtr);
+        throw Exception('PBKDF2-SHA256 failed: $error');
+      }
+
+      if (outputKeyPtr.value == ffi.nullptr) {
+        throw Exception('PBKDF2-SHA256 failed: null pointer');
+      }
+
+      final outputKey = Uint8List.fromList(outputKeyPtr.value.asTypedList(outputKeyLength));
+      _freeMemory(outputKeyPtr.value);
+
+      return outputKey;
+    } finally {
+      calloc.free(passwordPtr);
+      calloc.free(saltPtr);
+      calloc.free(outputKeyPtr);
+      _freeErrorPtr(errorPtr);
+      calloc.free(errorPtr);
     }
   }
 

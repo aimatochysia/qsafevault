@@ -2,12 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:cryptography/cryptography.dart';
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:meta/meta.dart';
 import '../config/sync_config.dart';
 import 'secure_storage.dart';
-import 'crypto_service.dart';
+import 'fips_crypto_service.dart';
 import 'relay_client.dart';
 import 'app_logger.dart';
 import 'crdt_service.dart';
@@ -41,12 +39,12 @@ enum SyncMode {
 /// - 8-character case-sensitive alphanumeric invite codes
 /// - CRDT-based conflict-free merging
 /// - WebRTC data channels for P2P communication
-/// - End-to-end encryption
+/// - End-to-end encryption using FIPS-compliant Rust FFI
 /// - Fallback to HTTP relay when P2P fails
 class SyncService {
   final _cfg = SyncConfig.defaults();
   final SecureStorage _secure = SecureStorage();
-  final CryptoService _crypto = CryptoService();
+  final FipsCryptoService _crypto = FipsCryptoService();
   final RelayClient _relay = RelayClient(config: SyncConfig.defaults());
   
   CrdtService? _crdt;
@@ -101,9 +99,9 @@ class SyncService {
     _currentMode = SyncMode.relay;
     status = SyncStatus.signaling;
     
-    final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
+    final key = _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
     final vaultJson = await getVaultJson();
-    final envelopeBytes = await _relay.encryptPayload(key, vaultJson);
+    final envelopeBytes = _relay.encryptPayload(key, vaultJson);
     final chunks = _relay.chunk(envelopeBytes, size: 32 * 1024);
     _log('sending chunks=${chunks.length}');
     for (int i = 0; i < chunks.length; i++) {
@@ -140,8 +138,8 @@ class SyncService {
         if (total != null && buffers.length == total) {
           final ordered = List<int>.generate(total!, (i) => i).map((i) => buffers[i]!).toList();
           final merged = _concat(ordered);
-          final key = await _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
-          final plaintext = await _relay.decryptPayload(key, merged);
+          final key = _relay.deriveTransferKey(pin: session.inviteCode, password: transferPassword);
+          final plaintext = _relay.decryptPayload(key, merged);
           status = SyncStatus.connected;
           _events?.add(SyncEvent.handshakeComplete());
           return plaintext;

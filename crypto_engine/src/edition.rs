@@ -1,5 +1,6 @@
 // Edition module: Product mode definitions and cryptographic policy enforcement
 // This module defines the security boundary for Consumer vs Enterprise editions
+// ALL ALGORITHMS ARE FIPS-APPROVED (FIPS 203/204/205 for post-quantum)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -13,33 +14,25 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum Edition {
-    /// Consumer Grade: Post-quantum first, flexibility allowed
-    /// - May use post-quantum algorithms (ML-KEM 768, Dilithium3)
-    /// - May use TPM / Secure Enclave
-    /// - May allow SoftHSM (explicitly non-production)
+    /// Consumer Grade: FIPS-certified post-quantum with flexibility
+    /// - Uses FIPS 203/204/205 post-quantum algorithms
+    /// - May use TPM / Secure Enclave / SoftHSM
     Consumer = 0,
 
     /// Enterprise Grade: FIPS-only, production-grade
-    /// - MUST use ONLY FIPS-approved cryptographic algorithms
-    /// - ALL non-FIPS algorithms are STRICTLY PROHIBITED
-    /// - Post-quantum algorithms are DISABLED until FIPS-approved
+    /// - Uses FIPS 203/204/205 post-quantum algorithms
     /// - External HSM REQUIRED
-    /// - SoftHSM MUST be rejected
+    /// - SoftHSM PROHIBITED
     Enterprise = 1,
 }
 
 /// Cryptographic policy derived from Edition
-/// This determines which algorithms and key providers are permitted
+/// Both editions use FIPS-approved algorithms only
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CryptoPolicy {
-    /// Post-quantum algorithms allowed (Consumer mode)
-    /// Permits: ML-KEM 768, Dilithium3, X25519, AES-256-GCM, HKDF-SHA3, Argon2id
-    PQAllowed,
-
-    /// FIPS-only mode (Enterprise mode)
-    /// Permits ONLY: AES-256-GCM, SHA-256/384, HKDF (FIPS hash), RSA, ECDH/ECDSA (FIPS validated)
-    /// PROHIBITS: ML-KEM, Dilithium, X25519, SHA3, Argon2id (unless policy explicitly permits)
-    FipsOnly,
+    /// FIPS-approved algorithms (both modes use FIPS now)
+    /// Permits: AES-256-GCM, SHA-256/384, HKDF-SHA256, PBKDF2, ML-KEM-1024, ML-DSA-65, SLH-DSA
+    FipsApproved,
 }
 
 /// Key provider type for edition-specific key management
@@ -59,10 +52,11 @@ pub enum KeyProviderType {
     ExternalHSM,
 }
 
-/// Algorithm identifier with FIPS compliance information
+/// Algorithm identifier - FIPS-approved algorithms only
+/// All algorithms must be FIPS-approved (classical or FIPS 203/204/205 post-quantum)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
-    // FIPS-approved algorithms
+    // FIPS-approved algorithms (Classical)
     Aes256Gcm,
     Sha256,
     Sha384,
@@ -74,36 +68,35 @@ pub enum Algorithm {
     EcdhP256,
     EcdhP384,
 
-    // Non-FIPS algorithms (Consumer only)
-    MlKem768,
-    Dilithium3,
-    X25519,
-    Sha3_256,
-    HkdfSha3_256,
-    Argon2id,
+    // FIPS-approved Post-Quantum algorithms (FIPS 203, 204, 205)
+    MlKem1024,      // FIPS 203: ML-KEM-1024
+    MlDsa65,        // FIPS 204: ML-DSA-65
+    SlhDsaSha2128s, // FIPS 205: SLH-DSA-SHA2-128s
 }
 
 impl Algorithm {
     /// Check if this algorithm is FIPS-approved
+    /// All algorithms in this enum are FIPS-approved
     pub fn is_fips_approved(&self) -> bool {
-        matches!(
-            self,
-            Algorithm::Aes256Gcm
-                | Algorithm::Sha256
-                | Algorithm::Sha384
-                | Algorithm::HkdfSha256
-                | Algorithm::Pbkdf2HmacSha256
-                | Algorithm::EcdsaP256
-                | Algorithm::EcdsaP384
-                | Algorithm::RsaOaep
-                | Algorithm::EcdhP256
-                | Algorithm::EcdhP384
-        )
+        true
     }
 
     /// Check if this algorithm is post-quantum
     pub fn is_post_quantum(&self) -> bool {
-        matches!(self, Algorithm::MlKem768 | Algorithm::Dilithium3)
+        matches!(
+            self, 
+            Algorithm::MlKem1024 
+                | Algorithm::MlDsa65 
+                | Algorithm::SlhDsaSha2128s
+        )
+    }
+    
+    /// Check if this algorithm is FIPS-certified post-quantum (FIPS 203/204/205)
+    pub fn is_fips_post_quantum(&self) -> bool {
+        matches!(
+            self,
+            Algorithm::MlKem1024 | Algorithm::MlDsa65 | Algorithm::SlhDsaSha2128s
+        )
     }
 }
 
@@ -114,8 +107,6 @@ pub enum EditionError {
     AlreadyInitialized,
     /// Edition not yet initialized
     NotInitialized,
-    /// Non-FIPS algorithm requested in Enterprise mode
-    NonFipsAlgorithmProhibited(Algorithm),
     /// SoftHSM not allowed in Enterprise mode
     SoftHsmProhibited,
     /// Local key generation not allowed in Enterprise mode
@@ -124,8 +115,6 @@ pub enum EditionError {
     ExternalHsmRequired,
     /// HSM is not FIPS-validated
     HsmNotFipsValidated,
-    /// Post-quantum algorithms disabled in Enterprise mode
-    PostQuantumDisabled,
     /// Server edition mismatch (Enterprise client to Consumer server)
     ServerEditionMismatch { client: Edition, server: Edition },
     /// Server does not support required Enterprise features
@@ -143,14 +132,11 @@ impl std::fmt::Display for EditionError {
             EditionError::NotInitialized => {
                 write!(f, "Edition not initialized - call initialize_edition first")
             }
-            EditionError::NonFipsAlgorithmProhibited(alg) => {
-                write!(f, "FIPS VIOLATION: Algorithm {:?} is not FIPS-approved and is prohibited in Enterprise mode", alg)
-            }
             EditionError::SoftHsmProhibited => {
-                write!(f, "ENTERPRISE: SoftHSM is not permitted in Enterprise mode - external HSM required")
+                write!(f, "ENTERPRISE: SoftHSM is not permitted - external HSM required")
             }
             EditionError::LocalKeyGenerationProhibited => {
-                write!(f, "ENTERPRISE: Local key generation is not permitted - keys must be generated in external HSM")
+                write!(f, "ENTERPRISE: Local key generation is not permitted - use external HSM")
             }
             EditionError::ExternalHsmRequired => {
                 write!(f, "ENTERPRISE: External HSM is required but not available")
@@ -158,14 +144,11 @@ impl std::fmt::Display for EditionError {
             EditionError::HsmNotFipsValidated => {
                 write!(f, "ENTERPRISE: HSM is not FIPS-validated")
             }
-            EditionError::PostQuantumDisabled => {
-                write!(f, "ENTERPRISE: Post-quantum algorithms are disabled until FIPS-approved")
-            }
             EditionError::ServerEditionMismatch { client, server } => {
-                write!(f, "ENTERPRISE: Edition mismatch - {:?} client cannot connect to {:?} server", client, server)
+                write!(f, "Edition mismatch - {:?} client cannot connect to {:?} server", client, server)
             }
             EditionError::ServerMissingEnterpriseFeatures(features) => {
-                write!(f, "ENTERPRISE: Server missing required features: {}", features)
+                write!(f, "Server missing required features: {}", features)
             }
             EditionError::ConfigurationError(msg) => {
                 write!(f, "Configuration error: {}", msg)
@@ -176,40 +159,25 @@ impl std::fmt::Display for EditionError {
 
 impl Edition {
     /// Get the cryptographic policy for this edition
+    /// Both editions now use FIPS-approved algorithms only
     pub fn crypto_policy(&self) -> CryptoPolicy {
-        match self {
-            Edition::Consumer => CryptoPolicy::PQAllowed,
-            Edition::Enterprise => CryptoPolicy::FipsOnly,
-        }
+        CryptoPolicy::FipsApproved
     }
 
     /// Check if an algorithm is permitted for this edition
-    pub fn is_algorithm_permitted(&self, algorithm: Algorithm) -> Result<(), EditionError> {
-        match self.crypto_policy() {
-            CryptoPolicy::PQAllowed => Ok(()),
-            CryptoPolicy::FipsOnly => {
-                if algorithm.is_fips_approved() {
-                    Ok(())
-                } else if algorithm.is_post_quantum() {
-                    Err(EditionError::PostQuantumDisabled)
-                } else {
-                    Err(EditionError::NonFipsAlgorithmProhibited(algorithm))
-                }
-            }
-        }
+    /// All algorithms in the Algorithm enum are FIPS-approved
+    pub fn is_algorithm_permitted(&self, _algorithm: Algorithm) -> Result<(), EditionError> {
+        Ok(())
     }
 
     /// Check if a key provider is permitted for this edition
     pub fn is_key_provider_permitted(&self, provider: KeyProviderType) -> Result<(), EditionError> {
         match self {
-            Edition::Consumer => Ok(()), // All providers allowed in Consumer mode
+            Edition::Consumer => Ok(()),
             Edition::Enterprise => match provider {
                 KeyProviderType::ExternalHSM => Ok(()),
-                KeyProviderType::TPM => Ok(()), // Allowed for device binding/attestation
-                KeyProviderType::SecureEnclave | KeyProviderType::StrongBox => {
-                    // Platform secure elements allowed for device binding
-                    Ok(())
-                }
+                KeyProviderType::TPM => Ok(()),
+                KeyProviderType::SecureEnclave | KeyProviderType::StrongBox => Ok(()),
                 KeyProviderType::SoftHSM => Err(EditionError::SoftHsmProhibited),
                 KeyProviderType::LocalSoftware => Err(EditionError::LocalKeyGenerationProhibited),
             },
@@ -227,19 +195,16 @@ impl Edition {
     /// Verify server edition compatibility
     pub fn verify_server_edition(&self, server_edition: Edition) -> Result<(), EditionError> {
         match (self, server_edition) {
-            // Enterprise client requires Enterprise server
             (Edition::Enterprise, Edition::Consumer) => Err(EditionError::ServerEditionMismatch {
                 client: *self,
                 server: server_edition,
             }),
-            // All other combinations are acceptable
             _ => Ok(()),
         }
     }
 }
 
 /// Initialize the global edition configuration
-/// This MUST be called once at startup and cannot be changed thereafter
 pub fn initialize_edition(edition: Edition) -> Result<(), EditionError> {
     if INITIALIZED.load(Ordering::SeqCst) {
         return Err(EditionError::AlreadyInitialized);
@@ -253,29 +218,16 @@ pub fn initialize_edition(edition: Edition) -> Result<(), EditionError> {
     log::info!("=================================================");
     log::info!("QSafeVault Crypto Engine initialized");
     log::info!("Edition: {:?}", edition);
-    log::info!("Crypto Policy: {:?}", edition.crypto_policy());
+    log::info!("All algorithms are FIPS-approved");
+    log::info!("Post-Quantum: FIPS 203/204/205 enabled");
     log::info!("=================================================");
-
-    if edition == Edition::Enterprise {
-        log::warn!("ENTERPRISE MODE: FIPS-only cryptography enforced");
-        log::warn!("ENTERPRISE MODE: Post-quantum algorithms DISABLED");
-        log::warn!("ENTERPRISE MODE: External HSM REQUIRED for root keys");
-        log::warn!("ENTERPRISE MODE: SoftHSM is PROHIBITED");
-    }
 
     Ok(())
 }
 
 /// Get the current edition
-/// Returns an error if the edition has not been initialized
 pub fn get_edition() -> Result<Edition, EditionError> {
     EDITION.get().copied().ok_or(EditionError::NotInitialized)
-}
-
-/// Get the current crypto policy
-/// Returns an error if the edition has not been initialized
-pub fn get_crypto_policy() -> Result<CryptoPolicy, EditionError> {
-    get_edition().map(|e| e.crypto_policy())
 }
 
 /// Check if the edition has been initialized
@@ -283,62 +235,63 @@ pub fn is_initialized() -> bool {
     INITIALIZED.load(Ordering::SeqCst)
 }
 
-/// Enforce algorithm policy for the current edition
-/// Returns an error if the algorithm is not permitted
-pub fn enforce_algorithm(algorithm: Algorithm) -> Result<(), EditionError> {
-    get_edition()?.is_algorithm_permitted(algorithm)
-}
-
-/// Enforce key provider policy for the current edition
-/// Returns an error if the key provider is not permitted
-pub fn enforce_key_provider(provider: KeyProviderType) -> Result<(), EditionError> {
-    get_edition()?.is_key_provider_permitted(provider)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Note: These tests need to run in separate processes because Edition is global
-    // For unit testing, we test the Edition methods directly without global state
+    #[test]
+    fn test_all_algorithms_fips_approved() {
+        assert!(Algorithm::Aes256Gcm.is_fips_approved());
+        assert!(Algorithm::Sha256.is_fips_approved());
+        assert!(Algorithm::Sha384.is_fips_approved());
+        assert!(Algorithm::HkdfSha256.is_fips_approved());
+        assert!(Algorithm::MlKem1024.is_fips_approved());
+        assert!(Algorithm::MlDsa65.is_fips_approved());
+        assert!(Algorithm::SlhDsaSha2128s.is_fips_approved());
+    }
 
     #[test]
-    fn test_consumer_edition_allows_all_algorithms() {
+    fn test_post_quantum_algorithms() {
+        assert!(Algorithm::MlKem1024.is_post_quantum());
+        assert!(Algorithm::MlDsa65.is_post_quantum());
+        assert!(Algorithm::SlhDsaSha2128s.is_post_quantum());
+        assert!(!Algorithm::Aes256Gcm.is_post_quantum());
+    }
+
+    #[test]
+    fn test_fips_post_quantum() {
+        assert!(Algorithm::MlKem1024.is_fips_post_quantum());
+        assert!(Algorithm::MlDsa65.is_fips_post_quantum());
+        assert!(Algorithm::SlhDsaSha2128s.is_fips_post_quantum());
+        assert!(!Algorithm::Aes256Gcm.is_fips_post_quantum());
+    }
+
+    #[test]
+    fn test_consumer_allows_all_algorithms() {
         let edition = Edition::Consumer;
-        assert!(edition.is_algorithm_permitted(Algorithm::MlKem768).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Dilithium3).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::MlKem1024).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::MlDsa65).is_ok());
         assert!(edition.is_algorithm_permitted(Algorithm::Aes256Gcm).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Sha3_256).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Argon2id).is_ok());
     }
 
     #[test]
-    fn test_enterprise_edition_prohibits_non_fips() {
+    fn test_enterprise_allows_fips_algorithms() {
         let edition = Edition::Enterprise;
-
-        // FIPS algorithms should be allowed
+        assert!(edition.is_algorithm_permitted(Algorithm::MlKem1024).is_ok());
+        assert!(edition.is_algorithm_permitted(Algorithm::MlDsa65).is_ok());
         assert!(edition.is_algorithm_permitted(Algorithm::Aes256Gcm).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::Sha256).is_ok());
-        assert!(edition.is_algorithm_permitted(Algorithm::HkdfSha256).is_ok());
-
-        // Non-FIPS algorithms should be prohibited
-        assert!(edition.is_algorithm_permitted(Algorithm::MlKem768).is_err());
-        assert!(edition.is_algorithm_permitted(Algorithm::Dilithium3).is_err());
-        assert!(edition.is_algorithm_permitted(Algorithm::Sha3_256).is_err());
-        assert!(edition.is_algorithm_permitted(Algorithm::X25519).is_err());
     }
 
     #[test]
-    fn test_consumer_edition_allows_all_key_providers() {
+    fn test_consumer_allows_all_providers() {
         let edition = Edition::Consumer;
         assert!(edition.is_key_provider_permitted(KeyProviderType::LocalSoftware).is_ok());
         assert!(edition.is_key_provider_permitted(KeyProviderType::SoftHSM).is_ok());
         assert!(edition.is_key_provider_permitted(KeyProviderType::TPM).is_ok());
-        assert!(edition.is_key_provider_permitted(KeyProviderType::ExternalHSM).is_ok());
     }
 
     #[test]
-    fn test_enterprise_edition_prohibits_softhsm() {
+    fn test_enterprise_prohibits_softhsm() {
         let edition = Edition::Enterprise;
         assert!(matches!(
             edition.is_key_provider_permitted(KeyProviderType::SoftHSM),
@@ -347,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enterprise_edition_prohibits_local_key_generation() {
+    fn test_enterprise_prohibits_local_generation() {
         let edition = Edition::Enterprise;
         assert!(matches!(
             edition.is_key_provider_permitted(KeyProviderType::LocalSoftware),
@@ -356,56 +309,27 @@ mod tests {
     }
 
     #[test]
-    fn test_enterprise_edition_allows_external_hsm() {
+    fn test_enterprise_allows_external_hsm() {
         let edition = Edition::Enterprise;
         assert!(edition.is_key_provider_permitted(KeyProviderType::ExternalHSM).is_ok());
     }
 
     #[test]
-    fn test_enterprise_client_rejects_consumer_server() {
+    fn test_edition_server_compatibility() {
         let client = Edition::Enterprise;
-        let server = Edition::Consumer;
         assert!(matches!(
-            client.verify_server_edition(server),
+            client.verify_server_edition(Edition::Consumer),
             Err(EditionError::ServerEditionMismatch { .. })
         ));
+        
+        let consumer = Edition::Consumer;
+        assert!(consumer.verify_server_edition(Edition::Consumer).is_ok());
+        assert!(consumer.verify_server_edition(Edition::Enterprise).is_ok());
     }
 
     #[test]
-    fn test_consumer_client_accepts_any_server() {
-        let client = Edition::Consumer;
-        assert!(client.verify_server_edition(Edition::Consumer).is_ok());
-        assert!(client.verify_server_edition(Edition::Enterprise).is_ok());
-    }
-
-    #[test]
-    fn test_algorithm_fips_classification() {
-        // FIPS approved
-        assert!(Algorithm::Aes256Gcm.is_fips_approved());
-        assert!(Algorithm::Sha256.is_fips_approved());
-        assert!(Algorithm::Sha384.is_fips_approved());
-        assert!(Algorithm::HkdfSha256.is_fips_approved());
-        assert!(Algorithm::Pbkdf2HmacSha256.is_fips_approved());
-
-        // Not FIPS approved
-        assert!(!Algorithm::MlKem768.is_fips_approved());
-        assert!(!Algorithm::Dilithium3.is_fips_approved());
-        assert!(!Algorithm::X25519.is_fips_approved());
-        assert!(!Algorithm::Sha3_256.is_fips_approved());
-        assert!(!Algorithm::Argon2id.is_fips_approved());
-    }
-
-    #[test]
-    fn test_algorithm_post_quantum_classification() {
-        assert!(Algorithm::MlKem768.is_post_quantum());
-        assert!(Algorithm::Dilithium3.is_post_quantum());
-        assert!(!Algorithm::Aes256Gcm.is_post_quantum());
-        assert!(!Algorithm::X25519.is_post_quantum());
-    }
-
-    #[test]
-    fn test_crypto_policy_mapping() {
-        assert_eq!(Edition::Consumer.crypto_policy(), CryptoPolicy::PQAllowed);
-        assert_eq!(Edition::Enterprise.crypto_policy(), CryptoPolicy::FipsOnly);
+    fn test_crypto_policy() {
+        assert_eq!(Edition::Consumer.crypto_policy(), CryptoPolicy::FipsApproved);
+        assert_eq!(Edition::Enterprise.crypto_policy(), CryptoPolicy::FipsApproved);
     }
 }

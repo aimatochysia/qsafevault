@@ -15,8 +15,8 @@ fn get_keystore_path() -> Result<PathBuf, String> {
 fn get_key_path(key_id: &str) -> Result<PathBuf, String> {
     let keystore_dir = get_keystore_path()?;
     // Use a hash of the key_id to avoid filesystem issues
-    use sha3::{Sha3_256, Digest};
-    let mut hasher = Sha3_256::new();
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
     hasher.update(key_id.as_bytes());
     let hash = hasher.finalize();
     let filename = format!("{:x}.key", hash);
