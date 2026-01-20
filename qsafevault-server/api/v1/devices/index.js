@@ -108,10 +108,17 @@ async function registerDevice(req, res) {
   }
   
   try {
-    // Use req.body if already parsed by Express
+    // Validate req.body exists (Express should have parsed it)
+    if (!req.body || typeof req.body !== 'object') {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.end(JSON.stringify({ error: 'invalid_json' }));
+      return;
+    }
+    
     const input = req.body;
     
-    const { userId, deviceId, onion, port, ttlSec } = input || {};
+    const { userId, deviceId, onion, port, ttlSec } = input;
     if (!userId || !deviceId || !validateOnion(onion)) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');

@@ -23,7 +23,14 @@ module.exports = async function sessionAnswer(req, res) {
     }
     
     if (req.method === 'POST') {
-      // Use req.body if already parsed by Express
+      // Validate req.body exists (Express should have parsed it)
+      if (!req.body || typeof req.body !== 'object') {
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ error: 'invalid_json' }));
+        return;
+      }
+      
       const envelope = req.body;
       
       if (!validateEnvelope(envelope, sessionId)) {
