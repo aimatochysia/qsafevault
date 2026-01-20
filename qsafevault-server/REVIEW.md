@@ -88,10 +88,13 @@ const rateLimitStore = new Map();
 
 **Recommendation:** Use Redis or Vercel KV for distributed rate limiting:
 ```javascript
-// Use Redis for production
+// Example using ioredis for production
+// const Redis = require('ioredis');
+// const redis = new Redis(process.env.REDIS_URL);
+
 const rateLimitStore = process.env.REDIS_URL 
-  ? new RedisStore() 
-  : new Map();
+  ? createRedisRateLimitStore(process.env.REDIS_URL) // Custom implementation needed
+  : new Map(); // Fallback for development
 ```
 
 ---
@@ -347,10 +350,15 @@ For Enterprise deployments, add administrative endpoints:
 
 Use a validation library (Joi, Zod) for consistent request validation:
 ```javascript
-const schema = Joi.object({
+// npm install joi
+const Joi = require('joi');
+
+const chunkSchema = Joi.object({
   pin: Joi.string().alphanum().length(8).required(),
   passwordHash: Joi.string().min(16).max(256).required(),
-  // ...
+  chunkIndex: Joi.number().integer().min(0).required(),
+  totalChunks: Joi.number().integer().min(1).max(2048).required(),
+  data: Joi.string().max(48 * 1024).required(),
 });
 ```
 
