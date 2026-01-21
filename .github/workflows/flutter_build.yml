@@ -12,7 +12,6 @@ on:
 env:
   PARENT_REPO: aimatochysia/qsafevault
   QSAFEVAULT_EDITION: consumer
-  SYNC_BASEURL: https://qsafevault-server.vercel.app
   QSV_TURN_FORCE_RELAY: true
 
 jobs:
@@ -117,7 +116,6 @@ jobs:
         run: >
           flutter build apk --release
           --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION}
-          --dart-define=QSV_SYNC_BASEURL=${SYNC_BASEURL}
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -128,7 +126,6 @@ jobs:
         run: >
           flutter build apk --release
           --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION}
-          --dart-define=QSV_SYNC_BASEURL=${SYNC_BASEURL}
 
       - name: Install Linux dependencies
         run: |
@@ -136,7 +133,7 @@ jobs:
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libglib2.0-dev liblzma-dev libsecret-1-dev fakeroot dpkg-dev
 
       - name: Build Linux
-        run: flutter build linux --release --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION} --dart-define=QSV_SYNC_BASEURL=${SYNC_BASEURL}
+        run: flutter build linux --release --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION}
 
       - name: Create Linux .deb package
         run: |
@@ -192,7 +189,7 @@ jobs:
         run: flutter pub get
 
       - name: Build Windows
-        run: flutter build windows --release --dart-define=QSAFEVAULT_EDITION=${env:QSAFEVAULT_EDITION} --dart-define=QSV_SYNC_BASEURL=${env:SYNC_BASEURL}
+        run: flutter build windows --release --dart-define=QSAFEVAULT_EDITION=${env:QSAFEVAULT_EDITION}
 
       - name: Resolve App Version
         shell: pwsh
@@ -291,7 +288,7 @@ jobs:
           flutter config --enable-macos-desktop
 
       - name: Build macOS
-        run: flutter build macos --release --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION} --dart-define=QSV_SYNC_BASEURL=${SYNC_BASEURL}
+        run: flutter build macos --release --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION}
 
       - name: Create DMG installer
         run: |
@@ -337,7 +334,7 @@ jobs:
           cd ios
           pod install
       - name: Build iOS (no codesign)
-        run: flutter build ios --release --no-codesign --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION} --dart-define=QSV_SYNC_BASEURL=${SYNC_BASEURL}
+        run: flutter build ios --release --no-codesign --dart-define=QSAFEVAULT_EDITION=${QSAFEVAULT_EDITION}
       - name: Package iOS .app
         run: |
           mkdir -p dist/ios
@@ -385,10 +382,10 @@ jobs:
             echo "RELEASE_BODY<<EOF"
             echo "## Consumer Edition Build"
             echo ""
-            echo "Automated multi-platform build results (Consumer mode with default public relay):"
+            echo "Automated multi-platform build results (Consumer mode with runtime-configurable relay):"
             echo ""
             echo "**Edition:** Consumer"
-            echo "**Server:** \`https://qsafevault-server.vercel.app\`"
+            echo "**Default Server:** \`https://qsafevault-server.vercel.app\` (changeable at runtime)"
             echo ""
             if [ "${{ steps.status.outputs.linux_status }}" = "success" ]; then
               echo "- ✅ Linux build succeeded"

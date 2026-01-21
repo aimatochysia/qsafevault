@@ -1,6 +1,6 @@
 /**
  * Ephemeral session manager for serverless signaling.
- * Uses Vercel Blob for cross-instance persistence when available,
+ * Uses Upstash Redis (KV) for cross-instance persistence when available,
  * falls back to in-memory storage for local development/testing.
  * Data is automatically deleted after use (single-read) or on expiration.
  * Supports both chunk-based relay and WebRTC signaling.
@@ -27,30 +27,34 @@ function now() { return Date.now(); }
 
 // ==================== Storage Backend ====================
 
-// Check if Vercel Blob is available
-const USE_BLOB_STORAGE = !!process.env.BLOB_READ_WRITE_TOKEN;
+// Check if Upstash Redis (KV) is available via env vars
+const USE_KV_STORAGE = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
 // In-memory fallback for local development/testing
 const memoryStore = new Map();
 
-// Lazy-load Vercel Blob to avoid errors when not available
-let blobModule = null;
-function getBlobModule() {
-  if (!blobModule && USE_BLOB_STORAGE) {
-    blobModule = require('@vercel/blob');
+// Lazy-load Upstash Redis to avoid errors when not available
+let redisClient = null;
+function getRedisClient() {
+  if (!redisClient && USE_KV_STORAGE) {
+    const { Redis } = require('@upstash/redis');
+    redisClient = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
   }
-  return blobModule;
+  return redisClient;
 }
 
-// Blob store prefix for namespacing
-const BLOB_PREFIX = 'qsafevault-sessions/';
+// Key prefix for namespacing
+const KEY_PREFIX = 'qsv-sessions:';
 
-// Cryptographic randomization for blob keys (prevents enumeration attacks)
+// Cryptographic randomization for keys (prevents enumeration attacks)
 const crypto = require('crypto');
 
 /**
  * Generate a cryptographic hash for key derivation
- * This makes blob keys unpredictable even if invite code is known
+ * This makes keys unpredictable even if invite code is known
  */
 function deriveSecureKey(...parts) {
   const combined = parts.join(':');
@@ -61,7 +65,7 @@ function deriveSecureKey(...parts) {
 function storageKey(prefix, ...parts) {
   // Use SHA-256 hash of combined parts for secure, unpredictable keys
   const secureHash = deriveSecureKey(prefix, ...parts);
-  return `${BLOB_PREFIX}${prefix}/${secureHash}`;
+  return `${KEY_PREFIX}${prefix}:${secureHash}`;
 }
 
 // Session key for chunk relay sessions
@@ -71,30 +75,30 @@ function sessionKey(inviteCode, passwordHash) {
 
 // ==================== Storage Operations ====================
 
+// Parse Redis data (handles both auto-parsed objects and JSON strings)
+function parseRedisData(data) {
+  if (!data) return null;
+  return typeof data === 'string' ? JSON.parse(data) : data;
+}
+
 // Read data from storage (returns null if not found or expired)
 async function readStorage(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      const metadata = await blob.head(key);
-      if (!metadata) return null;
+      const redis = getRedisClient();
+      const data = await redis.get(key);
+      if (!data) return null;
       
-      // Fetch the actual content
-      const response = await fetch(metadata.url);
-      if (!response.ok) return null;
+      const parsed = parseRedisData(data);
       
-      const data = await response.json();
-      
-      // Check if expired
-      if (data.expires && data.expires < now()) {
-        // Delete expired blob
-        await blob.del(key).catch(() => {});
+      // Check if expired (belt-and-suspenders with Redis TTL)
+      if (parsed.expires && parsed.expires < now()) {
+        await redis.del(key);
         return null;
       }
       
-      return data;
+      return parsed;
     } catch (e) {
-      // Blob not found or error
       return null;
     }
   } else {
@@ -112,17 +116,15 @@ async function readStorage(key) {
   }
 }
 
-// Write data to storage
+// Write data to storage with TTL
 async function writeStorage(key, data) {
-  if (USE_BLOB_STORAGE) {
-    const blob = getBlobModule();
-    const json = JSON.stringify(data);
-    await blob.put(key, json, {
-      access: 'public',
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: 'application/json',
-    });
+  if (USE_KV_STORAGE) {
+    const redis = getRedisClient();
+    // Calculate TTL in seconds from the expires field
+    const ttlMs = data.expires ? data.expires - now() : CHUNK_TTL_MS;
+    if (ttlMs <= 0) return; // Skip writing already-expired data
+    const ttlSec = Math.ceil(ttlMs / 1000);
+    await redis.set(key, JSON.stringify(data), { ex: ttlSec });
   } else {
     // In-memory fallback
     memoryStore.set(key, data);
@@ -131,10 +133,10 @@ async function writeStorage(key, data) {
 
 // Delete data from storage
 async function deleteStorage(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      await blob.del(key);
+      const redis = getRedisClient();
+      await redis.del(key);
     } catch (e) {
       // Ignore deletion errors
     }
@@ -151,52 +153,42 @@ async function deleteStorage(key) {
  * Pattern: Read -> Delete -> Return (all-or-nothing for the caller)
  */
 async function atomicReadAndDelete(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      const metadata = await blob.head(key);
-      if (!metadata) return null;
+      const redis = getRedisClient();
+      // Use Redis GETDEL-like pattern: get then del
+      const data = await redis.get(key);
+      if (!data) return null;
       
-      // Fetch the actual content
-      const response = await fetch(metadata.url);
-      if (!response.ok) return null;
-      
-      const data = await response.json();
+      const parsed = parseRedisData(data);
       
       // Check if expired
-      if (data.expires && data.expires < now()) {
-        // Delete expired blob (best effort)
-        await blob.del(key).catch(() => {});
+      if (parsed.expires && parsed.expires < now()) {
+        await redis.del(key);
         return null;
       }
       
       // ATOMIC: Delete immediately after reading, before returning data
-      // If delete fails after retries, return null to prevent data leakage
       let deleteSuccess = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          await blob.del(key);
+          await redis.del(key);
           deleteSuccess = true;
           break;
         } catch (delError) {
           if (attempt === 2) {
-            // Final attempt failed - for true atomicity, return null
             console.error('Atomic delete failed after retries:', delError);
           }
-          // Brief delay before retry
           await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
         }
       }
       
       if (!deleteSuccess) {
-        // Delete failed - return null to prevent potential duplicate reads
         return null;
       }
       
-      // Only return data after successful deletion
-      return data;
+      return parsed;
     } catch (e) {
-      // Blob not found or error - nothing to clean up
       return null;
     }
   } else {
@@ -220,28 +212,9 @@ async function atomicReadAndDelete(key) {
 async function purgeExpired() {
   const cutoff = now();
   
-  if (USE_BLOB_STORAGE) {
-    try {
-      const blob = getBlobModule();
-      const { blobs } = await blob.list({ prefix: BLOB_PREFIX });
-      
-      for (const b of blobs) {
-        try {
-          const response = await fetch(b.url);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.expires && data.expires < cutoff) {
-              // Use pathname for deletion, not the full URL
-              await blob.del(b.pathname);
-            }
-          }
-        } catch (e) {
-          // Skip blobs that can't be read
-        }
-      }
-    } catch (e) {
-      // Ignore purge errors
-    }
+  if (USE_KV_STORAGE) {
+    // Redis handles TTL-based expiration automatically.
+    // This is a no-op for KV storage since we set TTLs on write.
   } else {
     // In-memory fallback
     for (const [key, data] of memoryStore.entries()) {
@@ -585,5 +558,5 @@ module.exports = {
   CHUNK_TTL_MS,
   
   // For debugging
-  USE_BLOB_STORAGE,
+  USE_KV_STORAGE,
 };

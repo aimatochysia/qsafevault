@@ -13,12 +13,15 @@
  * - signal: Send signaling message (offer/answer/ICE)
  * - poll: Poll for signaling messages
  * 
- * All data is ephemeral - stored in Vercel Blob with short TTL.
+ * All data is ephemeral - stored in Upstash Redis KV with short TTL.
  * Data is deleted after use (single-read) or on expiration.
  * Server cannot read encrypted payloads (zero-trust).
  */
 
 const sessionManager = require('../sessionManager');
+
+// Valid WebRTC signal types per spec
+const VALID_SIGNAL_TYPES = ['offer', 'answer', 'ice-candidate'];
 
 module.exports = async function relayHandler(req, res) {
   const action = req.method === 'GET' ? req.query.action : req.body.action;
@@ -140,6 +143,10 @@ module.exports = async function relayHandler(req, res) {
     const { from, to, type, payload } = req.body;
     if (!from || !to || !type || !payload) {
       return res.status(400).json({ error: 'missing_fields' });
+    }
+    // Validate signal type
+    if (!VALID_SIGNAL_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'invalid_signal_type', validTypes: VALID_SIGNAL_TYPES });
     }
     try {
       const result = await sessionManager.queueSignal({ from, to, type, payload });
