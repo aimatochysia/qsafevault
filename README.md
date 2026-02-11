@@ -74,8 +74,9 @@ Use the **Manual Build** workflow for custom builds:
 1. Go to **Actions** → **Manual Build with Options**
 2. Select **edition** (consumer/enterprise)
 3. Choose platforms (Android, Linux, Windows, macOS, iOS, Web)
-4. Optionally specify **server URL** (required for Enterprise)
-5. Click **Run workflow**
+4. Click **Run workflow**
+
+The API server endpoint defaults to `https://qsafevault-server.vercel.app` and can be changed at runtime in the app's sync settings.
 
 See [`.github/workflows/manual_build.yml`](.github/workflows/manual_build.yml) for details.
 
