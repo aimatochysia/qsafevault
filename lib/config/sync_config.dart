@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'edition_config.dart';
+import '../services/api_endpoint_service.dart';
 
 class SyncConfig {
   final String baseUrl;
@@ -35,39 +36,45 @@ class SyncConfig {
     this.syncDisabled = false,
   });
 
-  /// Default consumer sync URL (public relay)
-  static const String _consumerDefaultUrl = 'https://qsafevault-server.vercel.app';
-  
   /// Placeholder for Enterprise - indicates no URL was configured
   static const String _enterpriseNoUrl = '';
 
+  /// Create a SyncConfig using the user-configurable API endpoint.
+  /// The endpoint is resolved at runtime from ApiEndpointService,
+  /// which defaults to qsafevault-server.vercel.app and can be
+  /// changed by the user.
   static SyncConfig defaults() {
     final edition = GlobalEdition.configOrDefault;
     
-    // Get user-provided URL from environment
-    final userProvidedUrl = const String.fromEnvironment(
+    // Get user-provided URL from environment (build-time override)
+    final envUrl = const String.fromEnvironment(
       'QSV_SYNC_BASEURL',
       defaultValue: '',
     ).trim();
     
-    // Determine base URL based on edition
-    // - Consumer: Use user URL if provided, otherwise default to public relay
-    // - Enterprise: MUST provide their own URL, sync disabled if not provided
+    // Resolve base URL:
+    // 1. Build-time env var takes highest priority
+    // 2. Runtime user-configured endpoint (from ApiEndpointService)
+    // 3. Enterprise: sync disabled if nothing configured
     String baseUrl;
     bool syncDisabled = false;
     
-    if (edition.isEnterprise) {
-      if (userProvidedUrl.isEmpty) {
-        // Enterprise mode requires explicit backend URL
-        // Sync is disabled until user configures their own server
+    if (envUrl.isNotEmpty) {
+      // Build-time override always wins
+      baseUrl = envUrl;
+    } else if (edition.isEnterprise) {
+      // Enterprise: use runtime endpoint or disable sync
+      final runtimeUrl = ApiEndpointService.instance.endpoint;
+      if (runtimeUrl == ApiEndpointService.defaultEndpoint) {
+        // Enterprise should not use the public relay by default
         baseUrl = _enterpriseNoUrl;
         syncDisabled = true;
       } else {
-        baseUrl = userProvidedUrl;
+        baseUrl = runtimeUrl;
       }
     } else {
-      // Consumer mode: use provided URL or fall back to public relay
-      baseUrl = userProvidedUrl.isNotEmpty ? userProvidedUrl : _consumerDefaultUrl;
+      // Consumer: use runtime user-configured endpoint
+      baseUrl = ApiEndpointService.instance.endpoint;
     }
     
     final turnUrls = const String.fromEnvironment('QSV_TURN_URLS', defaultValue: '')
