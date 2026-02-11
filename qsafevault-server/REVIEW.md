@@ -6,12 +6,12 @@ This document provides a thorough review of the qsafevault-server implementation
 
 ## Executive Summary
 
-The qsafevault-server has been improved with Vercel Blob persistence for all storage layers, enabling horizontal scaling for 100s of concurrent users while maintaining the zero-knowledge architecture.
+The qsafevault-server has been improved with Upstash Redis KV persistence for all storage layers, enabling horizontal scaling for 100s of concurrent users while maintaining the zero-knowledge architecture.
 
 **Overall Assessment:**
 - ✅ Good security architecture (zero-knowledge design)
 - ✅ Solid middleware stack (Helmet, rate limiting, CORS)
-- ✅ Vercel Blob storage for cross-instance persistence
+- ✅ Upstash Redis KV storage for cross-instance persistence
 - ✅ Optimistic concurrency control for parallel requests
 - ✅ Ready for 100s of concurrent users (Consumer edition)
 
@@ -27,16 +27,16 @@ The qsafevault-server has been improved with Vercel Blob persistence for all sto
 
 #### 1. `api/v1/sessions/sessionStore.js`
 - **Before**: In-memory `Map()` - lost on restart, couldn't scale horizontally
-- **After**: Vercel Blob storage with in-memory fallback for development
+- **After**: Upstash Redis KV storage with in-memory fallback for development
 - Enables WebRTC sessions to persist across server instances
 
 #### 2. `api/v1/devices/index.js` & `[userId].js`
 - **Before**: In-memory `Map()` for Enterprise device registry
-- **After**: Vercel Blob storage with async operations
+- **After**: Upstash Redis KV storage with async operations
 - Enterprise device registry now scales across instances
 
 #### 3. `api/v1/sessions/[sessionId]/*.js`
-- All session handlers now async to support Blob storage
+- All session handlers now async to support KV storage
 - Simplified to use Express body parser (no duplicate parsing)
 
 #### 4. `api/relay.js`
@@ -55,9 +55,9 @@ The qsafevault-server has been improved with Vercel Blob persistence for all sto
 ### Storage Layers
 | Layer | Storage | Scalability |
 |-------|---------|-------------|
-| Chunk relay (sessionManager) | Vercel Blob | ✅ Horizontal |
-| WebRTC sessions (sessionStore) | Vercel Blob | ✅ Horizontal |
-| Device registry (Enterprise) | Vercel Blob | ✅ Horizontal |
+| Chunk relay (sessionManager) | Upstash Redis KV | ✅ Horizontal |
+| WebRTC sessions (sessionStore) | Upstash Redis KV | ✅ Horizontal |
+| Device registry (Enterprise) | Upstash Redis KV | ✅ Horizontal |
 | Rate limiting | In-memory | ⚠️ Per-instance |
 
 ### Concurrency Handling
@@ -72,7 +72,7 @@ The qsafevault-server has been improved with Vercel Blob persistence for all sto
 ### Consumer Edition (Default)
 - ✅ Public deployment allowed (Vercel, Cloudflare, etc.)
 - ✅ Stateless relay only
-- ✅ Ephemeral storage (Vercel Blob)
+- ✅ Ephemeral storage (Upstash Redis KV)
 - ✅ Ready for 100s of concurrent users
 
 ### Enterprise Edition
@@ -91,7 +91,7 @@ The rate limiter still uses in-memory storage. For the current architecture:
 - In serverless (Vercel), each function invocation has its own rate limit state
 - This is acceptable for Consumer edition since Vercel's infrastructure provides additional protection
 
-**Note**: For strict rate limiting across instances, consider Vercel KV in a future enhancement.
+**Note**: For strict rate limiting across instances, consider using Upstash Redis-based rate limiting in a future enhancement.
 
 ### Security Strengths ✅
 
@@ -113,7 +113,7 @@ The rate limiter still uses in-memory storage. For the current architecture:
 
 | Scenario | Estimated Limit | Notes |
 |----------|-----------------|-------|
-| Concurrent sessions | **1000+** | Vercel Blob scales automatically |
+| Concurrent sessions | **1000+** | Upstash Redis KV scales automatically |
 | Parallel chunk uploads | **50+** per session | Optimistic concurrency handles conflicts |
 | Users per deployment | **100s** | Suitable for production |
 | Requests per minute | 100 per IP | Rate limited |
