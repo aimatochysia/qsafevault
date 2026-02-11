@@ -291,50 +291,11 @@ jobs:
           path: crypto_engine/target/ios-simulator-universal/release/libcrypto_engine.a
           if-no-files-found: error
 
-  build-web:
-    name: Build Web (WASM)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crypto_engine/target
-          key: wasm-cargo-${{ hashFiles('crypto_engine/Cargo.lock') }}
-          restore-keys: wasm-cargo-
-
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
-
-      - name: Build WASM
-        working-directory: crypto_engine
-        run: wasm-pack build --target web --release
-        continue-on-error: true
-
-      - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: wasm
-          path: crypto_engine/pkg/
-          if-no-files-found: warn
-
   # Commit FFI libraries to the repository for easy integration
   commit-ffi-libraries:
     name: Commit FFI Libraries to Repository
     runs-on: ubuntu-latest
-    needs: [build-linux, build-windows, build-macos, build-android, build-ios, build-web]
+    needs: [build-linux, build-windows, build-macos, build-android, build-ios]
     if: |
       always() &&
       ((github.event_name == 'workflow_dispatch' && github.event.inputs.commit_binaries == 'true') ||
@@ -345,7 +306,7 @@ jobs:
       - name: Check build results
         id: check-builds
         run: |
-          # Count successful builds (at least 5 required)
+          # Count successful builds (at least 4 required)
           SUCCESS_COUNT=0
           
           if [ "${{ needs.build-linux.result }}" == "success" ]; then
@@ -383,22 +344,15 @@ jobs:
             echo "build-ios: ${{ needs.build-ios.result }}"
           fi
           
-          if [ "${{ needs.build-web.result }}" == "success" ]; then
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            echo "build-web: success"
-          else
-            echo "build-web: ${{ needs.build-web.result }}"
-          fi
-          
           echo "Total successful builds: $SUCCESS_COUNT"
           echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
           
-          if [ $SUCCESS_COUNT -ge 5 ]; then
+          if [ $SUCCESS_COUNT -ge 4 ]; then
             echo "proceed=true" >> $GITHUB_OUTPUT
-            echo "At least 5 builds succeeded, proceeding with commit"
+            echo "At least 4 builds succeeded, proceeding with commit"
           else
             echo "proceed=false" >> $GITHUB_OUTPUT
-            echo "Less than 5 builds succeeded, skipping commit"
+            echo "Less than 4 builds succeeded, skipping commit"
           fi
 
       - name: Checkout source
@@ -503,18 +457,6 @@ jobs:
             echo "⚠ iOS simulator library not found in artifacts"
           fi
 
-      - name: Copy Web WASM files
-        if: steps.check-builds.outputs.proceed == 'true'
-        run: |
-          # Create web assets directory for WASM
-          mkdir -p web/wasm
-          if [ -d "ffi-libs/wasm" ]; then
-            cp -r ffi-libs/wasm/* web/wasm/
-            echo "✓ Copied WASM files"
-          else
-            echo "⚠ WASM build not available (expected for some configurations)"
-          fi
-
       - name: Configure Git
         if: steps.check-builds.outputs.proceed == 'true'
         run: |
@@ -530,7 +472,6 @@ jobs:
           git add windows/libs/ || true
           git add macos/libs/ || true
           git add ios/libs/ || true
-          git add web/wasm/ || true
           
           # Check if there are changes to commit
           if git diff --staged --quiet; then
@@ -546,8 +487,7 @@ jobs:
             - Linux (x86_64)
             - Windows (x86_64)
             - macOS (Universal)
-            - iOS (device + simulator)
-            - Web (WASM if available)"
+            - iOS (device + simulator)"
             
             git push
           fi
