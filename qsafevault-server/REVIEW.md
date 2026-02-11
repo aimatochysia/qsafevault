@@ -144,7 +144,7 @@ All tests pass:
 
 The qsafevault-server is now ready for production use with 100s of concurrent users:
 
-- **For Consumer edition**: Deploy to Vercel with `BLOB_READ_WRITE_TOKEN` configured
+- **For Consumer edition**: Deploy to Vercel with Upstash Redis KV configured (`KV_REST_API_URL`, `KV_REST_API_TOKEN`)
 - **For Enterprise edition**: Self-host with proper environment variables
 
 The zero-knowledge architecture is maintained throughout all changes.

@@ -1,7 +1,7 @@
 /**
  * Session Store for WebRTC Sessions
  * 
- * Uses Vercel Blob for cross-instance persistence when available,
+ * Uses Upstash Redis (KV) for cross-instance persistence when available,
  * falls back to in-memory storage for local development/testing.
  * 
  * This enables horizontal scaling for 100s of concurrent users.
@@ -17,28 +17,32 @@ function now() { return Date.now(); }
 
 // ==================== Storage Backend ====================
 
-// Check if Vercel Blob is available
-const USE_BLOB_STORAGE = !!process.env.BLOB_READ_WRITE_TOKEN;
+// Check if Upstash Redis (KV) is available via env vars
+const USE_KV_STORAGE = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
 // In-memory fallback for local development/testing
 const memoryStore = new Map();
 const memoryPinIndex = new Map();
 
-// Lazy-load Vercel Blob to avoid errors when not available
-let blobModule = null;
-function getBlobModule() {
-  if (!blobModule && USE_BLOB_STORAGE) {
-    blobModule = require('@vercel/blob');
+// Lazy-load Upstash Redis to avoid errors when not available
+let redisClient = null;
+function getRedisClient() {
+  if (!redisClient && USE_KV_STORAGE) {
+    const { Redis } = require('@upstash/redis');
+    redisClient = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
   }
-  return blobModule;
+  return redisClient;
 }
 
-// Blob store prefix for namespacing
-const BLOB_PREFIX = 'qsafevault-webrtc-sessions/';
+// Key prefix for namespacing
+const KEY_PREFIX = 'qsv-webrtc-sessions:';
 
 /**
  * Generate a cryptographic hash for key derivation
- * This makes blob keys unpredictable
+ * This makes keys unpredictable
  */
 function deriveSecureKey(...parts) {
   const combined = parts.join(':');
@@ -48,31 +52,28 @@ function deriveSecureKey(...parts) {
 // Generate a safe storage key from session parameters
 function storageKey(prefix, ...parts) {
   const secureHash = deriveSecureKey(prefix, ...parts);
-  return `${BLOB_PREFIX}${prefix}/${secureHash}`;
+  return `${KEY_PREFIX}${prefix}:${secureHash}`;
 }
 
 // ==================== Storage Operations ====================
 
 // Read data from storage (returns null if not found or expired)
 async function readStorage(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      const metadata = await blob.head(key);
-      if (!metadata) return null;
+      const redis = getRedisClient();
+      const data = await redis.get(key);
+      if (!data) return null;
       
-      const response = await fetch(metadata.url);
-      if (!response.ok) return null;
+      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
       
-      const data = await response.json();
-      
-      // Check if expired
-      if (data.expires && data.expires < now()) {
-        await blob.del(key).catch(() => {});
+      // Check if expired (belt-and-suspenders with Redis TTL)
+      if (parsed.expires && parsed.expires < now()) {
+        await redis.del(key);
         return null;
       }
       
-      return data;
+      return parsed;
     } catch (e) {
       return null;
     }
@@ -90,17 +91,13 @@ async function readStorage(key) {
   }
 }
 
-// Write data to storage
+// Write data to storage with TTL
 async function writeStorage(key, data) {
-  if (USE_BLOB_STORAGE) {
-    const blob = getBlobModule();
-    const json = JSON.stringify(data);
-    await blob.put(key, json, {
-      access: 'public',
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: 'application/json',
-    });
+  if (USE_KV_STORAGE) {
+    const redis = getRedisClient();
+    const ttlMs = data.expires ? data.expires - now() : SESS_TTL_MS;
+    const ttlSec = Math.max(1, Math.ceil(ttlMs / 1000));
+    await redis.set(key, JSON.stringify(data), { ex: ttlSec });
   } else {
     memoryStore.set(key, data);
   }
@@ -108,10 +105,10 @@ async function writeStorage(key, data) {
 
 // Delete data from storage
 async function deleteStorage(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      await blob.del(key);
+      const redis = getRedisClient();
+      await redis.del(key);
     } catch (e) {
       // Ignore deletion errors
     }
@@ -225,28 +222,9 @@ async function deleteSession(sessionId) {
 }
 
 async function purgeExpired() {
-  if (USE_BLOB_STORAGE) {
-    try {
-      const blob = getBlobModule();
-      const { blobs } = await blob.list({ prefix: BLOB_PREFIX });
-      const cutoff = now();
-      
-      for (const b of blobs) {
-        try {
-          const response = await fetch(b.url);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.expires && data.expires < cutoff) {
-              await blob.del(b.pathname);
-            }
-          }
-        } catch (e) {
-          // Skip blobs that can't be read
-        }
-      }
-    } catch (e) {
-      // Ignore purge errors
-    }
+  if (USE_KV_STORAGE) {
+    // Redis handles TTL-based expiration automatically.
+    // This is a no-op for KV storage since we set TTLs on write.
   } else {
     const cutoff = now();
     for (const [key, data] of memoryStore.entries()) {
@@ -265,5 +243,5 @@ module.exports = {
   deleteSession,
   purgeExpired,
   SESS_TTL_SEC,
-  USE_BLOB_STORAGE,
+  USE_KV_STORAGE,
 };

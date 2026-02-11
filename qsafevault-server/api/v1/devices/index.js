@@ -1,7 +1,7 @@
 /**
  * Device Registry for Enterprise Edition
  * 
- * Uses Vercel Blob for cross-instance persistence when available,
+ * Uses Upstash Redis (KV) for cross-instance persistence when available,
  * falls back to in-memory storage for local development/testing.
  * 
  * ENTERPRISE ONLY: This endpoint requires Enterprise mode.
@@ -11,21 +11,25 @@ const crypto = require('crypto');
 
 // ==================== Storage Backend ====================
 
-const USE_BLOB_STORAGE = !!process.env.BLOB_READ_WRITE_TOKEN;
+const USE_KV_STORAGE = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
 // In-memory fallback for local development/testing
 const memoryStore = new Map();
 
-// Lazy-load Vercel Blob
-let blobModule = null;
-function getBlobModule() {
-  if (!blobModule && USE_BLOB_STORAGE) {
-    blobModule = require('@vercel/blob');
+// Lazy-load Upstash Redis
+let redisClient = null;
+function getRedisClient() {
+  if (!redisClient && USE_KV_STORAGE) {
+    const { Redis } = require('@upstash/redis');
+    redisClient = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
   }
-  return blobModule;
+  return redisClient;
 }
 
-const BLOB_PREFIX = 'qsafevault-devices/';
+const KEY_PREFIX = 'qsv-devices:';
 
 function deriveSecureKey(...parts) {
   const combined = parts.join(':');
@@ -34,7 +38,7 @@ function deriveSecureKey(...parts) {
 
 function storageKey(userId) {
   const secureHash = deriveSecureKey('devices', userId);
-  return `${BLOB_PREFIX}${secureHash}`;
+  return `${KEY_PREFIX}${secureHash}`;
 }
 
 function now() { return Date.now(); }
@@ -42,16 +46,12 @@ function now() { return Date.now(); }
 // ==================== Storage Operations ====================
 
 async function readStorage(key) {
-  if (USE_BLOB_STORAGE) {
+  if (USE_KV_STORAGE) {
     try {
-      const blob = getBlobModule();
-      const metadata = await blob.head(key);
-      if (!metadata) return null;
-      
-      const response = await fetch(metadata.url);
-      if (!response.ok) return null;
-      
-      return await response.json();
+      const redis = getRedisClient();
+      const data = await redis.get(key);
+      if (!data) return null;
+      return typeof data === 'string' ? JSON.parse(data) : data;
     } catch (e) {
       return null;
     }
@@ -61,15 +61,10 @@ async function readStorage(key) {
 }
 
 async function writeStorage(key, data) {
-  if (USE_BLOB_STORAGE) {
-    const blob = getBlobModule();
-    const json = JSON.stringify(data);
-    await blob.put(key, json, {
-      access: 'public',
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: 'application/json',
-    });
+  if (USE_KV_STORAGE) {
+    const redis = getRedisClient();
+    // Device registrations have a max TTL of 24 hours
+    await redis.set(key, JSON.stringify(data), { ex: 86400 });
   } else {
     memoryStore.set(key, data);
   }

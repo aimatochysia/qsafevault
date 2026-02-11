@@ -18,7 +18,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@vercel/blob": "^2.0.0",
+    "@upstash/redis": "^1.36.2",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
     "uuid": "^9.0.1"
