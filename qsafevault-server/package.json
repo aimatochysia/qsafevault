@@ -13,7 +13,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "Serverless signaling server for QSafeVault P2P sync using Vercel Blob for ephemeral session storage.",
+  "description": "Serverless signaling server for QSafeVault P2P sync using Upstash Redis KV for ephemeral session storage.",
   "engines": {
     "node": ">=24"
   },

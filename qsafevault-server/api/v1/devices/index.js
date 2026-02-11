@@ -45,13 +45,19 @@ function now() { return Date.now(); }
 
 // ==================== Storage Operations ====================
 
+// Parse Redis data (handles both auto-parsed objects and JSON strings)
+function parseRedisData(data) {
+  if (!data) return null;
+  return typeof data === 'string' ? JSON.parse(data) : data;
+}
+
 async function readStorage(key) {
   if (USE_KV_STORAGE) {
     try {
       const redis = getRedisClient();
       const data = await redis.get(key);
       if (!data) return null;
-      return typeof data === 'string' ? JSON.parse(data) : data;
+      return parseRedisData(data);
     } catch (e) {
       return null;
     }

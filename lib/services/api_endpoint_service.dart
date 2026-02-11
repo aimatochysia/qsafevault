@@ -46,6 +46,15 @@ class ApiEndpointService {
     return _userDefault;
   }
 
+  /// Validate that a URL is a valid HTTP(S) endpoint
+  static bool isValidEndpoint(String url) {
+    final trimmed = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (trimmed.isEmpty) return false;
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null) return false;
+    return uri.scheme == 'https' || uri.scheme == 'http';
+  }
+
   /// Set the current API endpoint
   Future<void> setEndpoint(String url) async {
     await init();
@@ -53,6 +62,7 @@ class ApiEndpointService {
     if (trimmed.isEmpty) {
       await _box!.put(_endpointKey, _userDefault);
     } else {
+      if (!isValidEndpoint(trimmed)) return;
       await _box!.put(_endpointKey, trimmed);
     }
   }
@@ -64,6 +74,7 @@ class ApiEndpointService {
     if (trimmed.isEmpty) {
       await _box!.delete(_customDefaultKey);
     } else {
+      if (!isValidEndpoint(trimmed)) return;
       await _box!.put(_customDefaultKey, trimmed);
     }
   }

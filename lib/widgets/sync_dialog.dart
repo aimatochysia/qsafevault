@@ -429,6 +429,12 @@ class _SyncDialogState extends State<SyncDialog> {
                   icon: const Icon(Icons.save, size: 14),
                   label: const Text('Save', style: TextStyle(fontSize: 11)),
                   onPressed: _busy ? null : () async {
+                    if (!ApiEndpointService.isValidEndpoint(_endpointCtl.text) && _endpointCtl.text.trim().isNotEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invalid URL. Use https://...')),
+                      );
+                      return;
+                    }
                     await ApiEndpointService.instance.setEndpoint(_endpointCtl.text);
                     if (!mounted) return;
                     setState(() => _showEndpointSettings = false);
@@ -444,6 +450,12 @@ class _SyncDialogState extends State<SyncDialog> {
                   icon: const Icon(Icons.star, size: 14),
                   label: const Text('Set Default', style: TextStyle(fontSize: 11)),
                   onPressed: _busy ? null : () async {
+                    if (!ApiEndpointService.isValidEndpoint(_endpointCtl.text)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invalid URL. Use https://...')),
+                      );
+                      return;
+                    }
                     await ApiEndpointService.instance.setCustomDefault(_endpointCtl.text);
                     await ApiEndpointService.instance.setEndpoint(_endpointCtl.text);
                     if (!mounted) return;

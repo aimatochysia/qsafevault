@@ -57,6 +57,12 @@ function storageKey(prefix, ...parts) {
 
 // ==================== Storage Operations ====================
 
+// Parse Redis data (handles both auto-parsed objects and JSON strings)
+function parseRedisData(data) {
+  if (!data) return null;
+  return typeof data === 'string' ? JSON.parse(data) : data;
+}
+
 // Read data from storage (returns null if not found or expired)
 async function readStorage(key) {
   if (USE_KV_STORAGE) {
@@ -65,7 +71,7 @@ async function readStorage(key) {
       const data = await redis.get(key);
       if (!data) return null;
       
-      const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+      const parsed = parseRedisData(data);
       
       // Check if expired (belt-and-suspenders with Redis TTL)
       if (parsed.expires && parsed.expires < now()) {
@@ -96,7 +102,8 @@ async function writeStorage(key, data) {
   if (USE_KV_STORAGE) {
     const redis = getRedisClient();
     const ttlMs = data.expires ? data.expires - now() : SESS_TTL_MS;
-    const ttlSec = Math.max(1, Math.ceil(ttlMs / 1000));
+    if (ttlMs <= 0) return; // Skip writing already-expired data
+    const ttlSec = Math.ceil(ttlMs / 1000);
     await redis.set(key, JSON.stringify(data), { ex: ttlSec });
   } else {
     memoryStore.set(key, data);
