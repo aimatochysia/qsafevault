@@ -1,6 +1,7 @@
 name: Build Rust FFI Libraries
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       branch:
