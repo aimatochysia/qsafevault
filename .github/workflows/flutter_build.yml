@@ -14,6 +14,9 @@ env:
   QSAFEVAULT_EDITION: consumer
   QSV_TURN_FORCE_RELAY: true
 
+permissions:
+  contents: write
+
 jobs:
   build-rust-ffi:
     name: Build Rust FFI Libraries
