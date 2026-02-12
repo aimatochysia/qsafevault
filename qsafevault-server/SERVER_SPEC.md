@@ -61,7 +61,7 @@ QSafeVault Server is a **zero-knowledge signaling server** that facilitates secu
 │                      │                      │
 │  ┌───────────────────────────────────────┐  │
 │  │         Storage Backend               │  │
-│  │  • Vercel Blob (production)           │  │
+│  │  • Upstash Redis KV (production)      │  │
 │  │  • In-memory Map (development)        │  │
 │  └───────────────────────────────────────┘  │
 └─────────────────────────────────────────────┘
@@ -145,24 +145,25 @@ Device A (Sender)              Server                    Device B (Receiver)
 
 ## Storage Backend
 
-### Vercel Blob (Production)
+### Upstash Redis KV (Production)
 
-When `BLOB_READ_WRITE_TOKEN` environment variable is set, the server uses Vercel Blob for cross-instance persistence.
+When `KV_REST_API_URL` and `KV_REST_API_TOKEN` environment variables are set, the server uses Upstash Redis for cross-instance persistence.
 
 ```javascript
-// Check if Vercel Blob is available
-const USE_BLOB_STORAGE = !!process.env.BLOB_READ_WRITE_TOKEN;
+// Check if Upstash Redis (KV) is available
+const USE_KV_STORAGE = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 ```
 
-#### Blob Configuration
+#### Redis Configuration
 
 ```javascript
-await blob.put(key, jsonData, {
-  access: 'public',
-  addRandomSuffix: false,
-  allowOverwrite: true,
-  contentType: 'application/json',
+const { Redis } = require('@upstash/redis');
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
 });
+// Data is stored as JSON strings with TTL
+await redis.set(key, JSON.stringify(data), { ex: ttlSeconds });
 ```
 
 #### Key Derivation
@@ -180,13 +181,13 @@ function deriveSecureKey(...parts) {
 
 function storageKey(prefix, ...parts) {
   const secureHash = deriveSecureKey(prefix, ...parts);
-  return `qsafevault-sessions/${prefix}/${secureHash}`;
+  return `qsv-sessions:${prefix}:${secureHash}`;
 }
 ```
 
 ### In-Memory Fallback (Development)
 
-When `BLOB_READ_WRITE_TOKEN` is not set, the server uses an in-memory `Map` for storage. This is suitable for local development and testing but **not for production** (data is lost on restart, not shared across instances).
+When `KV_REST_API_URL` is not set, the server uses an in-memory `Map` for storage. This is suitable for local development and testing but **not for production** (data is lost on restart, not shared across instances).
 
 ### TTL Configuration
 
@@ -634,7 +635,7 @@ GET /api/v1/devices/{userId}
 When the Flutter app sends multiple chunks in parallel (using `Promise.all` / `Future.wait`), a race condition can occur:
 
 ```
-Time    Device A (Sender)           Vercel Blob
+Time    Device A (Sender)           Upstash Redis
 ─────   ─────────────────           ───────────
 T1      Send chunk[0] ─────────────> Read session (empty)
 T2      Send chunk[1] ─────────────> Read session (empty)
@@ -844,7 +845,7 @@ async function atomicReadAndDelete(key) {
 
 - Public deployment allowed (Vercel, Cloudflare, etc.)
 - Stateless relay only
-- Ephemeral storage (Vercel Blob)
+- Ephemeral storage (Upstash Redis KV)
 - No device registry
 - No audit logging
 
@@ -860,8 +861,12 @@ Requires `QSAFEVAULT_EDITION=enterprise` environment variable.
 ### Configuration
 
 ```bash
-# Required for Vercel Blob storage
-BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx
+# Required for Upstash Redis KV storage (Vercel deployment)
+KV_REST_API_URL=https://your-redis.upstash.io
+KV_REST_API_TOKEN=your_token
+KV_REST_API_READ_ONLY_TOKEN=your_read_only_token
+KV_URL=redis://...
+REDIS_URL=redis://...
 
 # Optional: Set to "enterprise" for Enterprise features
 QSAFEVAULT_EDITION=consumer
@@ -879,7 +884,7 @@ To build a QSafeVault-compatible server:
 - [ ] Implement `/api/v1/edition` endpoint
 - [ ] Implement `/api/relay` with all 8 actions
 - [ ] Implement `/api/v1/sessions/*` endpoints
-- [ ] Implement storage backend (Vercel Blob or equivalent)
+- [ ] Implement storage backend (Upstash Redis KV or equivalent)
 - [ ] Implement optimistic concurrency control for `pushChunk`
 - [ ] Implement atomic read-and-delete for signal polling
 - [ ] Add rate limiting (100 req/min/IP recommended)

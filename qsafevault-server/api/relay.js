@@ -13,7 +13,7 @@
  * - signal: Send signaling message (offer/answer/ICE)
  * - poll: Poll for signaling messages
  * 
- * All data is ephemeral - stored in Vercel Blob with short TTL.
+ * All data is ephemeral - stored in Upstash Redis KV with short TTL.
  * Data is deleted after use (single-read) or on expiration.
  * Server cannot read encrypted payloads (zero-trust).
  */

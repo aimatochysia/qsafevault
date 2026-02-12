@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '/pages/landing_page.dart';
 import '/services/fips_crypto_service.dart';
 import '/services/storage_service.dart';
+import '/services/api_endpoint_service.dart';
 import 'platforms/windows.dart';
 import 'dart:io';
 import 'package:qsafevault/services/theme_service.dart';
@@ -15,6 +17,12 @@ void main() async {
   final editionConfig = EditionConfig.fromEnvironment();
   GlobalEdition.initialize(editionConfig);
   debugPrint('QSafeVault starting in ${editionConfig.editionName} mode');
+  
+  // Initialize Hive for local storage (used by ApiEndpointService etc.)
+  await Hive.initFlutter();
+  
+  // Initialize API endpoint service (user-configurable sync server URL)
+  await ApiEndpointService.instance.init();
   
   await ThemeService.instance.init();
   final cryptoService = FipsCryptoService();

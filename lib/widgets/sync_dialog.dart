@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '/services/sync_service.dart';
 import '/services/invite_code_utils.dart';
+import '/services/api_endpoint_service.dart';
 import '/config/sync_config.dart';
 
 enum RelayRole { sender, receiver }
@@ -88,6 +89,7 @@ class _SyncDialogState extends State<SyncDialog> {
 
   final _inviteCodeCtl = TextEditingController();
   final _pwdCtl = TextEditingController();
+  final _endpointCtl = TextEditingController();
 
   bool _busy = false;
   int _sent = 0;
@@ -97,6 +99,7 @@ class _SyncDialogState extends State<SyncDialog> {
 
   bool _senderSessionStarted = false;
   String? _generatedInviteCode;
+  bool _showEndpointSettings = false;
 
   @override
   void initState() {
@@ -106,6 +109,8 @@ class _SyncDialogState extends State<SyncDialog> {
   }
 
   Future<void> _init() async {
+    await ApiEndpointService.instance.init();
+    _endpointCtl.text = ApiEndpointService.instance.endpoint;
     await _sync.init();
     _sub = _sync.events?.listen((e) {
       if (!mounted) return;
@@ -130,6 +135,7 @@ class _SyncDialogState extends State<SyncDialog> {
     _sync.stop();
     _inviteCodeCtl.dispose();
     _pwdCtl.dispose();
+    _endpointCtl.dispose();
     super.dispose();
   }
 
@@ -319,7 +325,19 @@ class _SyncDialogState extends State<SyncDialog> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Device Sync (Relay)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Device Sync (Relay)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+                      IconButton(
+                        icon: Icon(_showEndpointSettings ? Icons.close : Icons.settings),
+                        tooltip: 'API Endpoint Settings',
+                        onPressed: _busy ? null : () => setState(() => _showEndpointSettings = !_showEndpointSettings),
+                      ),
+                    ],
+                  ),
+                  if (_showEndpointSettings) _endpointSettings(),
                   const SizedBox(height: 6),
                   Text('Status: $_status', style: const TextStyle(fontSize: 13)),
                   if (_error != null) ...[
@@ -375,6 +393,103 @@ class _SyncDialogState extends State<SyncDialog> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _endpointSettings() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('API Endpoint', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          TextField(
+            controller: _endpointCtl,
+            enabled: !_busy,
+            style: const TextStyle(fontSize: 12),
+            decoration: InputDecoration(
+              hintText: ApiEndpointService.defaultEndpoint,
+              border: const OutlineInputBorder(),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.save, size: 14),
+                  label: const Text('Save', style: TextStyle(fontSize: 11)),
+                  onPressed: _busy ? null : () async {
+                    if (!ApiEndpointService.isValidEndpoint(_endpointCtl.text) && _endpointCtl.text.trim().isNotEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invalid URL. Use https://...')),
+                      );
+                      return;
+                    }
+                    await ApiEndpointService.instance.setEndpoint(_endpointCtl.text);
+                    if (!mounted) return;
+                    setState(() => _showEndpointSettings = false);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('API endpoint saved')),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.star, size: 14),
+                  label: const Text('Set Default', style: TextStyle(fontSize: 11)),
+                  onPressed: _busy ? null : () async {
+                    if (!ApiEndpointService.isValidEndpoint(_endpointCtl.text)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invalid URL. Use https://...')),
+                      );
+                      return;
+                    }
+                    await ApiEndpointService.instance.setCustomDefault(_endpointCtl.text);
+                    await ApiEndpointService.instance.setEndpoint(_endpointCtl.text);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Custom default endpoint saved')),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.restore, size: 14),
+                  label: const Text('Reset', style: TextStyle(fontSize: 11)),
+                  onPressed: _busy ? null : () async {
+                    await ApiEndpointService.instance.resetAll();
+                    if (!mounted) return;
+                    setState(() {
+                      _endpointCtl.text = ApiEndpointService.defaultEndpoint;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Reset to default endpoint')),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Current: ${ApiEndpointService.instance.endpoint}',
+            style: const TextStyle(fontSize: 10, color: Colors.grey),
+          ),
+        ],
       ),
     );
   }

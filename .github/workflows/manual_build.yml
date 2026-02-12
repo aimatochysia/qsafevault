@@ -12,12 +12,6 @@ on:
           - consumer
           - enterprise
       
-      server_url:
-        description: 'Backend Server URL (required for Enterprise, optional for Consumer)'
-        required: false
-        default: ''
-        type: string
-      
       build_android:
         description: 'Build Android APK'
         required: false
@@ -47,52 +41,30 @@ on:
         required: false
         default: false
         type: boolean
-      
-      build_web:
-        description: 'Build Web'
-        required: false
-        default: false
-        type: boolean
 
 env:
   PARENT_REPO: aimatochysia/qsafevault
-  # Default server URL for Consumer mode if not specified
-  DEFAULT_CONSUMER_URL: https://qsafevault-server.vercel.app
 
 jobs:
   validate-inputs:
     name: Validate Build Configuration
     runs-on: ubuntu-latest
     outputs:
-      sync_url: ${{ steps.validate.outputs.sync_url }}
       edition: ${{ steps.validate.outputs.edition }}
       tag: ${{ steps.validate.outputs.tag }}
     steps:
-      - name: Validate Enterprise requires server URL
+      - name: Validate configuration
         id: validate
         run: |
           EDITION="${{ github.event.inputs.edition }}"
-          SERVER_URL="${{ github.event.inputs.server_url }}"
           
           echo "edition=$EDITION" >> $GITHUB_OUTPUT
           echo "tag=v$(date +'%Y%m%d-%H%M')-$EDITION" >> $GITHUB_OUTPUT
           
           if [ "$EDITION" = "enterprise" ]; then
-            if [ -z "$SERVER_URL" ]; then
-              echo "❌ ERROR: Enterprise mode requires a server URL"
-              echo "Please provide your self-hosted backend URL in 'server_url' input"
-              exit 1
-            fi
-            echo "✅ Enterprise mode with custom server: $SERVER_URL"
-            echo "sync_url=$SERVER_URL" >> $GITHUB_OUTPUT
+            echo "✅ Enterprise mode - server endpoint is configurable at runtime"
           else
-            if [ -z "$SERVER_URL" ]; then
-              echo "✅ Consumer mode with default public relay"
-              echo "sync_url=$DEFAULT_CONSUMER_URL" >> $GITHUB_OUTPUT
-            else
-              echo "✅ Consumer mode with custom server: $SERVER_URL"
-              echo "sync_url=$SERVER_URL" >> $GITHUB_OUTPUT
-            fi
+            echo "✅ Consumer mode - default relay: https://qsafevault-server.vercel.app (changeable at runtime)"
           fi
 
   build-android:
@@ -170,8 +142,7 @@ jobs:
       - name: Build Android APK
         run: |
           flutter build apk --release \
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} \
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
+            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }}
 
       - name: Rename artifact with edition
         run: |
@@ -214,8 +185,7 @@ jobs:
       - name: Build Linux
         run: |
           flutter build linux --release \
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} \
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
+            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }}
 
       - name: Create Linux .deb package
         run: |
@@ -264,8 +234,7 @@ jobs:
       - name: Build Windows
         run: |
           flutter build windows --release `
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} `
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
+            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }}
 
       - name: Install Inno Setup
         run: choco install innosetup -y
@@ -356,8 +325,7 @@ jobs:
       - name: Build macOS
         run: |
           flutter build macos --release \
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} \
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
+            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }}
 
       - name: Create DMG installer
         run: |
@@ -409,8 +377,7 @@ jobs:
       - name: Build iOS (no codesign)
         run: |
           flutter build ios --release --no-codesign \
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} \
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
+            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }}
 
       - name: Package iOS .app
         run: |
@@ -427,48 +394,10 @@ jobs:
           path: qsafevault-${{ needs.validate-inputs.outputs.edition }}-ios.zip
           if-no-files-found: warn
 
-  build-web:
-    name: Build Web
-    runs-on: ubuntu-latest
-    needs: validate-inputs
-    if: ${{ github.event.inputs.build_web == 'true' }}
-    
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PARENT_REPO }}
-          token: ${{ secrets.PAT_TOKEN }}
-          ref: main
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: 3.32.0
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Web
-        run: |
-          flutter build web --release \
-            --dart-define=QSAFEVAULT_EDITION=${{ needs.validate-inputs.outputs.edition }} \
-            --dart-define=QSV_SYNC_BASEURL=${{ needs.validate-inputs.outputs.sync_url }}
-
-      - name: Package Web
-        run: |
-          zip -r qsafevault-${{ needs.validate-inputs.outputs.edition }}-web.zip build/web
-
-      - name: Upload Web artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-${{ needs.validate-inputs.outputs.edition }}
-          path: qsafevault-${{ needs.validate-inputs.outputs.edition }}-web.zip
-
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-android, build-linux, build-windows, build-macos, build-ios, build-web]
+    needs: [validate-inputs, build-android, build-linux, build-windows, build-macos, build-ios]
     if: always() && !cancelled()
     
     steps:
@@ -482,7 +411,6 @@ jobs:
         run: |
           EDITION="${{ needs.validate-inputs.outputs.edition }}"
           TAG="${{ needs.validate-inputs.outputs.tag }}"
-          SERVER_URL="${{ needs.validate-inputs.outputs.sync_url }}"
           
           {
             echo "RELEASE_BODY<<EOF"
@@ -490,7 +418,7 @@ jobs:
             echo ""
             echo "**Build Tag:** \`$TAG\`"
             echo "**Edition:** ${EDITION^}"
-            echo "**Server URL:** \`$SERVER_URL\`"
+            echo "**Default Server:** \`https://qsafevault-server.vercel.app\` (changeable at runtime)"
             echo ""
             echo "### Build Results"
             echo ""
@@ -535,25 +463,17 @@ jobs:
               echo "- ⏭️ iOS (skipped)"
             fi
             
-            if [ "${{ needs.build-web.result }}" = "success" ]; then
-              echo "- ✅ Web"
-            elif [ "${{ github.event.inputs.build_web }}" = "true" ]; then
-              echo "- ❌ Web (failed)"
-            else
-              echo "- ⏭️ Web (skipped)"
-            fi
-            
             echo ""
             echo "### Edition Details"
             echo ""
             if [ "$EDITION" = "enterprise" ]; then
               echo "- **FIPS-only cryptography**: AES-256-GCM, SHA-256/384"
               echo "- **Post-quantum disabled**: Until FIPS-approved"
-              echo "- **Self-hosted server required**: \`$SERVER_URL\`"
+              echo "- **Server endpoint**: Configurable at runtime in app settings"
             else
               echo "- **Post-quantum enabled**: ML-KEM 768 + Dilithium3"
               echo "- **Hybrid security**: PQC + Classical algorithms"
-              echo "- **Server**: \`$SERVER_URL\`"
+              echo "- **Default server**: \`https://qsafevault-server.vercel.app\` (changeable at runtime)"
             fi
             
             echo "EOF"

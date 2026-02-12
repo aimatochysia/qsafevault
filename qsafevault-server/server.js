@@ -22,7 +22,7 @@
  * - Enterprise: Device registry, audit logging, self-hosted only
  * 
  * SCALABILITY:
- * - Vercel Blob for cross-instance persistence
+ * - Upstash Redis KV for cross-instance persistence
  * - Optimistic concurrency control for parallel requests
  * - Supports 100s of concurrent users
  */
