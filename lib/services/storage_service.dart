@@ -288,7 +288,7 @@ class StorageService {
       iterations = max(tuned.iterations, sc.minPbkdf2Iterations);
     }
     
-    final salt = Uint8List.fromList(sh.secureRandomBytes(cryptoService.saltLength));
+    final salt = Uint8List.fromList(sh.secureRandomBytes(FipsCryptoService.saltLength));
     final strongKey = cryptoService.deriveKeyFromPassword(
       password: password,
       salt: salt,
