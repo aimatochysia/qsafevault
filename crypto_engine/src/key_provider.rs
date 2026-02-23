@@ -372,6 +372,7 @@ impl KeyProvider for EnterpriseKeyProvider {
 /// 
 /// NOTE: Enterprise mode key provider creation requires explicit HSM configuration.
 /// Use create_key_provider_with_config() for Enterprise deployments.
+#[allow(dead_code)]
 pub fn create_key_provider() -> KeyProviderResult<Box<dyn KeyProvider>> {
     let edition = get_edition()?;
     
@@ -390,6 +391,7 @@ pub fn create_key_provider() -> KeyProviderResult<Box<dyn KeyProvider>> {
 }
 
 /// Create a key provider with explicit configuration
+#[allow(dead_code)]
 pub fn create_key_provider_with_config(
     edition: Edition,
     hsm_config: Option<EnterpriseHsmConfig>,

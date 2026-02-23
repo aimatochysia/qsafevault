@@ -38,15 +38,15 @@ class RustCryptoService {
     _lib = loadCryptoLibrary();
     
     _generateKeypair = _lib
-        .lookup<ffi.NativeFunction<NativeGenerateKeypair>>('pqcrypto_generate_hybrid_keypair')
+        .lookup<ffi.NativeFunction<NativeGenerateKeypair>>('pqcrypto_encrypt_master_key')
         .asFunction();
     
     _hybridEncrypt = _lib
-        .lookup<ffi.NativeFunction<NativeHybridEncrypt>>('pqcrypto_hybrid_encrypt_master_key')
+        .lookup<ffi.NativeFunction<NativeHybridEncrypt>>('pqcrypto_encrypt_master_key')
         .asFunction();
     
     _hybridDecrypt = _lib
-        .lookup<ffi.NativeFunction<NativeHybridDecrypt>>('pqcrypto_hybrid_decrypt_master_key')
+        .lookup<ffi.NativeFunction<NativeHybridDecrypt>>('pqcrypto_encrypt_master_key')
         .asFunction();
     
     _sealKey = _lib
