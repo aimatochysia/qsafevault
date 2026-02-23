@@ -39,9 +39,14 @@ OUTPUT_DIR="target/ios-universal"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
+# Set iOS deployment target to match Xcode project settings (13.0)
+# This is critical: without this, Rust defaults to ios10.0 which lacks
+# ___chkstk_darwin, causing linker failures with pqcrypto libraries
+export IPHONEOS_DEPLOYMENT_TARGET=13.0
+
 # Build for each target
 for target in "${TARGETS[@]}"; do
-    echo "Building for $target..."
+    echo "Building for $target (iOS deployment target: $IPHONEOS_DEPLOYMENT_TARGET)..."
     cargo build --release --target "$target"
 done
 

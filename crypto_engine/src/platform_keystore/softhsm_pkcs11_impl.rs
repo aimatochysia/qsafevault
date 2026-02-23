@@ -56,6 +56,7 @@ fn find_softhsm_library() -> Option<PathBuf> {
 }
 
 /// Initialize PKCS#11 context (called once)
+#[allow(static_mut_refs)]
 fn init_pkcs11() -> Result<&'static Ctx, String> {
     unsafe {
         INIT.call_once(|| {
@@ -189,6 +190,7 @@ pub fn seal_with_softhsm(
 
 /// Unwraps a master key using PKCS#11 SoftHSM
 /// The wrapping key is accessed within the HSM, never extracted
+#[allow(dead_code)]
 pub fn unseal_with_softhsm(
     key_id: &str,
     _wrapped_key: &[u8],

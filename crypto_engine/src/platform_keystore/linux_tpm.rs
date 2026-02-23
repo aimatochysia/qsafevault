@@ -12,6 +12,7 @@ pub fn is_tpm_available() -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn is_tpm_available() -> bool {
     false
 }
@@ -134,16 +135,19 @@ fn delete_seal_metadata(key_id: &str) -> Result<(), String> {
 
 // Stub implementations for non-Linux platforms
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn seal_private_key(_key_id: &str, _key_data: &[u8]) -> Result<(), String> {
     Err("Linux TPM not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn unseal_private_key(_key_id: &str) -> Result<Vec<u8>, String> {
     Err("Linux TPM not available on this platform".to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 pub fn delete_private_key(_key_id: &str) -> Result<(), String> {
     Err("Linux TPM not available on this platform".to_string())
 }
